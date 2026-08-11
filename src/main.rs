@@ -1,3 +1,5 @@
+use rhp::parse;
+
 fn main() {
-    println!("Hello, world!");
+    parse();
 }
