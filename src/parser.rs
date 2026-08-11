@@ -1,5 +1,3 @@
-// parser.rs
-
 use crate::ast::*;
 use crate::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
 use crate::lexer::Span;
@@ -10,8 +8,6 @@ pub struct Parser {
     errors: Vec<ParseError>,
 }
 
-// ---- Core helpers ----
-
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Self { tokens, pos: 0, errors: Vec::new() }
@@ -21,6 +17,7 @@ impl Parser {
         self.tokens.get(self.pos).map(|t| &t.node)
     }
 
+    #[allow(dead_code)]
     fn peek_spanned(&self) -> Option<&SpannedToken> {
         self.tokens.get(self.pos)
     }
@@ -71,7 +68,7 @@ impl Parser {
             match self.peek() {
                 None => break,
                 Some(Token::Semicolon) => { self.advance(); break; }
-                Some(Token::RBrace)    => break, // don't consume — parent needs it
+                Some(Token::RBrace)    => break, // don't consume, parent needs it
                 Some(
                     Token::Let | Token::Const | Token::Var |
                     Token::If  | Token::For   | Token::While |
@@ -83,26 +80,18 @@ impl Parser {
         }
     }
 
-    fn error(&mut self, msg: &str) -> Span {
-        let span = self.current_span();
-        self.errors.push(ParseError { message: msg.to_string(), span: span.clone() });
-        span
-    }
-}
+    // fn error(&mut self, msg: &str) -> Span {
+    //     let span = self.current_span();
+    //     self.errors.push(ParseError { message: msg.to_string(), span: span.clone() });
+    //     span
+    // }
 
-// ---- Public entry point ----
-
-impl Parser {
     pub fn parse(tokens: Vec<SpannedToken>) -> (Vec<SpannedStmt>, Vec<ParseError>) {
         let mut p = Parser::new(tokens);
         let stmts = p.parse_block_contents();
         (stmts, p.errors)
     }
-}
 
-// ---- Statement parsing ----
-
-impl Parser {
     fn parse_block_contents(&mut self) -> Vec<SpannedStmt> {
         let mut stmts = Vec::new();
         while !self.is_at_end() && self.peek() != Some(&Token::RBrace) {
@@ -286,11 +275,7 @@ impl Parser {
         self.expect(&Token::RParen, "expected `)`");
         Ok(params)
     }
-}
 
-// ---- Expression parsing (Pratt) ----
-
-impl Parser {
     fn parse_expr(&mut self) -> Result<SpannedExpr, ParseError> {
         self.parse_assign()
     }
@@ -489,7 +474,7 @@ impl Parser {
         }
     }
 
-    // Single bare ident — could be the start of an arrow: `x => ...`
+    // Single bare ident, could be the start of an arrow: `x => ...`
     fn parse_ident_or_arrow(&mut self) -> Result<SpannedExpr, ParseError> {
         let span  = self.current_span();
         let name  = self.expect_ident("expected identifier")?;
@@ -504,7 +489,7 @@ impl Parser {
         Ok(Spanned::new(Expr::Ident(name), span))
     }
 
-    // `(...)` — either a grouped expr or arrow params
+    // `(...)`, either a grouped expr or arrow params
     fn parse_paren_or_arrow(&mut self) -> Result<SpannedExpr, ParseError> {
         let start = self.current_span().start;
         self.advance(); // eat `(`
@@ -549,12 +534,12 @@ impl Parser {
                     self.advance(); // eat `=>`
                     is_arrow = true;
                 } else {
-                    // Not an arrow — backtrack and parse as grouped expr
+                    // Not an arrow, backtrack and parse as grouped expr
                     self.pos = saved_pos;
                     self.errors.truncate(saved_errors);
                 }
             } else {
-                // Not all idents — backtrack
+                // Not all idents, backtrack
                 self.pos = saved_pos;
                 self.errors.truncate(saved_errors);
             }
@@ -603,7 +588,7 @@ impl Parser {
     }
 }
 
-// Binding powers — higher = tighter binding
+// Binding powers, higher = tighter binding
 fn infix_binding_power(op: &BinOp) -> (u8, u8) {
     match op {
         BinOp::Or                              => (1, 2),

@@ -1,12 +1,9 @@
-// value.rs
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+
 use crate::ast::*;
 use crate::eval::EvalError;
-
-// ---- Environment (scope chain) ----
 
 #[derive(Debug, Clone)]
 pub struct Env {

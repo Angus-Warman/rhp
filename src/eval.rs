@@ -1,12 +1,7 @@
-// eval.rs
-
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
 use crate::value::*;
-
-// ---- Errors ----
 
 #[derive(Debug, Clone)]
 pub struct EvalError {
@@ -20,8 +15,14 @@ impl EvalError {
     }
 }
 
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}..{}: {:?}", self.span.start, self.span.end, self.message)
+    }
+}
+
 // ---- Control flow signals ----
-// These aren't errors — they're how return/break/continue unwind the call stack.
+// These aren't errors, they're how return/break/continue unwind the call stack.
 
 #[derive(Debug)]
 enum Signal {
@@ -649,7 +650,7 @@ fn loose_eq(l: &Value, r: &Value) -> bool {
         (Value::Number(a), Value::Number(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Bool(a),   Value::Bool(b))   => a == b,
-        // null == null only, not null == 0 etc — keep it sane
+        // null == null only, not null == 0 etc, keep it sane
         _ => false,
     }
 }
