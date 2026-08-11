@@ -1,6 +1,10 @@
-use rhp::parse;
+use rhp::evaluate;
 
 fn main() {
-    let res = parse("return 1 + 2");
+    let res = evaluate(r"
+    let x = (n) => n + 1;
+    let y = (v) => v(2) * 2
+    return y(x)
+    ");
     dbg!(res);
 }

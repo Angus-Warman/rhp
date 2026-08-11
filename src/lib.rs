@@ -4,7 +4,7 @@ mod ast;
 mod value;
 mod eval;
 
-pub fn parse(src: &str) -> String {
+pub fn evaluate(src: &str) -> String {
     let tokens = lexer::lex_code(src).unwrap();
     let (stmts, _) = parser::Parser::parse(tokens);
     let mut evalulator = eval::Evaluator::new();
@@ -12,3 +12,7 @@ pub fn parse(src: &str) -> String {
     evalulator.eval_stmts(&stmts, env).unwrap();
     evalulator.output
 }
+
+#[cfg(test)]
+#[path = "./lib_tests.rs"]
+mod tests;
