@@ -59,9 +59,10 @@ impl Evaluator {
             if let Err(signal) = self.eval_stmt(stmt, env.clone()) {
                 match signal {
                     Signal::Error(e) => return Err(e),
-                    Signal::Return(_) => return Err(EvalError::new(
-                        "return outside function", stmt.span.clone()
-                    )),
+                    Signal::Return(value) => {
+                        self.output += &value.display();
+                        return Ok(());
+                    },
                     Signal::Break => return Err(EvalError::new(
                         "break outside loop", stmt.span.clone()
                     )),
