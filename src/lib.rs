@@ -1,54 +1,20 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use axum::{Router, extract::Request, response::Html, routing::get_service};
+use tower_http::services::ServeDir;
 
-use crate::value::{
-    Env, Function,
-    FunctionBody::{self},
-    Value,
-};
 
 mod ast;
 mod eval;
 mod lexer;
 mod parser;
 mod value;
+mod process;
 
-pub fn evaluate(src: &str) -> String {
-    let tokens = lexer::lex_code(src).unwrap();
-    let (stmts, _) = parser::Parser::parse(tokens);
-    let mut evalulator = eval::Evaluator::new();
-    let env = value::Env::new_root();
+pub async fn run_server() {
+    let app = Router::new()
+        // .route("/*.rhp", get_service(rhp_handler))
+        .fallback_service(get_service(ServeDir::new("public")));
 
-    { // Scopes env_mut
-        let mut env_mut = env.borrow_mut();
-        env_mut.define("VERSION", value::Value::String("0.0.1".to_string()));
-
-        let log = Value::Function(Function {
-            params: vec!["value".to_string()],
-            body: FunctionBody::Native(Rc::new(|args| {
-                let output = args
-                    .iter()
-                    .map(|v| v.display())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                println!("{}", output);
-                Ok(Value::Null)
-            })),
-            captured: Env::new_root(),
-        });
-
-        let console = Value::Object(Rc::new(RefCell::new({
-            let mut map = HashMap::new();
-            map.insert("log".to_string(), log);
-            map
-        })));
-
-        env_mut.define("console", console);
-    }
-
-    evalulator.eval_stmts(&stmts, env).unwrap();
-    evalulator.output
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    dbg!(&listener);
+    axum::serve(listener, app).await.unwrap();
 }
-
-#[cfg(test)]
-#[path = "./lib_tests.rs"]
-mod tests;
