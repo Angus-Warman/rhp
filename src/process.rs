@@ -5,7 +5,7 @@ use crate::{eval::Evaluator, lexer, parser::Parser, value::{
 }};
 
 #[allow(dead_code)]
-pub fn process_src(src: &str) -> String {
+pub fn process_src(src: &str, method: &str) -> String {
     let env = setup_env();
     let mut output = "".to_string();
 
@@ -14,10 +14,15 @@ pub fn process_src(src: &str) -> String {
     for section in sections {
         match section {
             Section::Html(html) => output += &html,
-            Section::Code(script) => {
-                let result = process_script_section(env.clone(), &script); 
+            Section::Code { code, method: None } => {
+                let result = process_script_section(env.clone(), &code);
                 output += &result;
             },
+            Section::Code { code, method: Some(m) } if m.eq_ignore_ascii_case(method) => {
+                let result = process_script_section(env.clone(), &code);
+                output += &result;
+            },
+            Section::Code { .. } => {},
         }
     }
 
@@ -27,7 +32,20 @@ pub fn process_src(src: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Section {
     Html(String),
-    Code(String),
+    Code { code: String, method: Option<String> },
+}
+
+fn parse_method(attrs: &str) -> Option<String> {
+    const PREFIX: &str = "method=";
+    let i = attrs.find(PREFIX)?;
+    let rest = attrs[i + PREFIX.len()..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let rest = &rest[1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
 }
 
 fn split_src(src: &str) -> Vec<Section> {
@@ -35,30 +53,37 @@ fn split_src(src: &str) -> Vec<Section> {
     let mut rest = src;
 
     while !rest.is_empty() {
-        match rest.find("<rhp>") {
+        match rest.find("<rhp") {
             None => {
                 // No more code blocks — remainder is HTML
                 sections.push(Section::Html(rest.to_string()));
                 break;
             }
-            Some(html_end) => {
+            Some(start) => {
                 // Capture HTML before the tag
-                if html_end > 0 {
-                    sections.push(Section::Html(rest[..html_end].to_string()));
+                if start > 0 {
+                    sections.push(Section::Html(rest[..start].to_string()));
                 }
 
-                let after_open = &rest[html_end + "<rhp>".len()..];
+                let after_open = &rest[start + "<rhp".len()..];
+                let (method, body) = match after_open.find('>') {
+                    Some(gt) => (parse_method(&after_open[..gt]), &after_open[gt + 1..]),
+                    None => (None, after_open),
+                };
 
-                match after_open.find("</rhp>") {
+                match body.find("</rhp>") {
                     None => {
                         // Unclosed tag — treat the rest as a code block anyway,
                         // or you could return an Err here
-                        sections.push(Section::Code(after_open.to_string()));
+                        sections.push(Section::Code { code: body.to_string(), method });
                         break;
                     }
                     Some(code_end) => {
-                        sections.push(Section::Code(after_open[..code_end].to_string()));
-                        rest = &after_open[code_end + "</rhp>".len()..];
+                        sections.push(Section::Code {
+                            code: body[..code_end].to_string(),
+                            method,
+                        });
+                        rest = &body[code_end + "</rhp>".len()..];
                     }
                 }
             }

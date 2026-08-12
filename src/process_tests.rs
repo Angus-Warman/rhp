@@ -33,6 +33,34 @@ fn test_console_log() {
     "), "");
 }
 
+#[test]
+fn test_method_filtered_sections() {
+    let src = r#"<rhp method="PUT">return "put"</rhp><rhp method="POST">return "post"</rhp>"#;
+    assert_eq!(process_src(src, "POST"), "post");
+    assert_eq!(process_src(src, "PUT"), "put");
+    assert_eq!(process_src(src, "GET"), "");
+}
+
+#[test]
+fn test_unfiltered_section_runs_all_methods() {
+    let src = r#"<rhp>return "always"</rhp>"#;
+    assert_eq!(process_src(src, "GET"), "always");
+    assert_eq!(process_src(src, "POST"), "always");
+}
+
+#[test]
+fn test_split_src_parses_method_attr() {
+    let src = r#"<rhp method="PUT">a</rhp><rhp>b</rhp><rhp method='POST'>c</rhp>"#;
+    assert_eq!(
+        split_src(src),
+        vec![
+            Section::Code { code: "a".into(), method: Some("PUT".into()) },
+            Section::Code { code: "b".into(), method: None },
+            Section::Code { code: "c".into(), method: Some("POST".into()) },
+        ]
+    );
+}
+
 // #[test]
 // fn test_object_prop() {
 //     assert_eq!(evaluate(r"

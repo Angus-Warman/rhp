@@ -21,3 +21,29 @@ async fn test_non_rhp() {
     response.assert_status_ok();
     response.assert_text_contains("Plain");
 }
+
+#[tokio::test]
+async fn test_method_routing_post() {
+    let server = test_server();
+    let response = server.post("/methods.rhp").await;
+    response.assert_status_ok();
+    response.assert_text("\nthis is a post request");
+}
+
+#[tokio::test]
+async fn test_method_routing_put() {
+    let server = test_server();
+    let response = server.put("/methods.rhp").await;
+    response.assert_status_ok();
+    response.assert_text("this is a put request\n");
+}
+
+#[tokio::test]
+async fn test_method_routing_mismatch() {
+    let server = test_server();
+    let response = server.get("/methods.rhp").await;
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(!body.contains("put"), "GET response must not include the PUT block: {body:?}");
+    assert!(!body.contains("post"), "GET response must not include the POST block: {body:?}");
+}

@@ -46,18 +46,18 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
-        process_rhp(path).await.into_response()
+        process_rhp(path, request.method().as_str()).await.into_response()
     } else {
-        ServeDir::new("public")
+        ServeDir::new(state.folder)
             .oneshot(request)
             .await
             .into_response()
     }
 }
 
-async fn process_rhp(path: PathBuf) -> Response {
+async fn process_rhp(path: PathBuf, method: &str) -> Response {
     match tokio::fs::read_to_string(path).await {
-        Ok(src) => Html(process_src(&src)).into_response(),
+        Ok(src) => Html(process_src(&src, method)).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
