@@ -43,7 +43,7 @@ fn build_router(folder: PathBuf) -> Router {
 }
 
 async fn rhp_handler(State(state): State<AppState>, request: Request) -> Response {
-    let path = state.folder.join(request.uri().path());
+    let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
         process_rhp(path).await.into_response()
