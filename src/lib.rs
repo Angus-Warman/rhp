@@ -1,7 +1,7 @@
 use std::{path::{Path, PathBuf}};
 
 use axum::{
-    Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any,
+    Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any, debug_handler,
 };
 use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
@@ -29,6 +29,7 @@ struct AppState {
     folder: PathBuf,
 }
 
+
 fn build_router(folder: PathBuf) -> Router {
     let state = AppState {
         folder: folder,
@@ -42,12 +43,12 @@ fn build_router(folder: PathBuf) -> Router {
     app
 }
 
+#[debug_handler]
 async fn rhp_handler(State(state): State<AppState>, request: Request) -> Response {
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
-        // let context = Context::from_request(request).await.unwrap();
-        process_rhp(path, Context::default()).await.into_response()
+        process_rhp(path, request).await.into_response()
     } else {
         ServeDir::new(state.folder)
             .oneshot(request)
@@ -56,9 +57,12 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn process_rhp(path: PathBuf, context: Context) -> Response {
+async fn process_rhp(path: PathBuf, request: Request) -> Response {
     match tokio::fs::read_to_string(path).await {
-        Ok(src) => Html(process_src(&src, &context)).into_response(),
+        Ok(src) => {
+            let context = Context::from_request(request).await.unwrap();
+            Html(process_src(&src, &context)).into_response()
+        },
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
