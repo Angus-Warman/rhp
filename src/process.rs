@@ -1,6 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use axum::http::Request;
+use axum::extract::{Query, Request};
+use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderMap;
 
 use crate::{eval::Evaluator, lexer, parser::Parser, value::{
     self, Env, Function, FunctionBody::{self}, Value,
@@ -10,14 +12,29 @@ use crate::{eval::Evaluator, lexer, parser::Parser, value::{
 pub struct Context {
     pub method: Method,
     pub query:  HashMap<String, String>,
+    pub body:   Value,
+}
+
+#[derive(Debug)]
+pub enum ContextError {
+    Body(axum::Error),
+    Json(serde_json::Error),
+    Form(serde_urlencoded::de::Error),
 }
 
 impl Context {
-    pub fn from_request<B>(request: &Request<B>) -> Self {
-        Self {
-            method: Method::from_str(request.method().as_str()),
-            query:  parse_url_query(request.uri().query()),
-        }
+    pub async fn from_request(request: Request) -> Result<Self, ContextError> {
+        let (parts, body) = request.into_parts();
+        let method = Method::from_str(parts.method.as_str());
+        let query = Query::<HashMap<String, String>>::try_from_uri(&parts.uri)
+            .map(|q| q.0)
+            .unwrap_or_default();
+        let bytes = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .map_err(ContextError::Body)?;
+        let body_value = parse_body(method, &parts.headers, &bytes)?;
+
+        Ok(Self { method, query, body: body_value })
     }
 }
 
@@ -26,24 +43,68 @@ impl Default for Context {
         Self {
             method: Method::All,
             query:  HashMap::new(),
+            body:   empty_object(),
         }
     }
 }
 
-fn parse_url_query(query: Option<&str>) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    if let Some(q) = query {
-        for pair in q.split('&') {
-            if pair.is_empty() {
-                continue;
-            }
-            match pair.split_once('=') {
-                Some((k, v)) => { map.insert(k.to_string(), v.to_string()); }
-                None         => { map.insert(pair.to_string(), String::new()); }
+fn empty_object() -> Value {
+    Value::Object(Rc::new(RefCell::new(HashMap::new())))
+}
+
+fn parse_body(method: Method, headers: &HeaderMap, bytes: &[u8]) -> Result<Value, ContextError> {
+    if matches!(method, Method::Get | Method::Head) || bytes.is_empty() {
+        return Ok(empty_object());
+    }
+
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if content_type.starts_with("application/json") || content_type.ends_with("+json") {
+        let json: serde_json::Value = serde_json::from_slice(bytes).map_err(ContextError::Json)?;
+        return Ok(json_to_value(json));
+    }
+
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        let form: HashMap<String, Vec<String>> =
+            serde_urlencoded::from_bytes(bytes).map_err(ContextError::Form)?;
+        let mut map = HashMap::new();
+        for (key, values) in form {
+            if values.len() == 1 {
+                map.insert(key, Value::String(values[0].clone()));
+            } else {
+                let arr = values.into_iter().map(Value::String).collect::<Vec<_>>();
+                map.insert(key, Value::Array(Rc::new(RefCell::new(arr))));
             }
         }
+        return Ok(Value::Object(Rc::new(RefCell::new(map))));
     }
-    map
+
+    // Default: treat as text
+    let mut map = HashMap::new();
+    map.insert("text".to_string(), Value::String(String::from_utf8_lossy(bytes).to_string()));
+    Ok(Value::Object(Rc::new(RefCell::new(map))))
+}
+
+fn json_to_value(json: serde_json::Value) -> Value {
+    match json {
+        serde_json::Value::Null    => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::Array(items) => {
+            let vals = items.into_iter().map(json_to_value).collect::<Vec<_>>();
+            Value::Array(Rc::new(RefCell::new(vals)))
+        }
+        serde_json::Value::Object(map) => {
+            let vals = map.into_iter()
+                .map(|(k, v)| (k, json_to_value(v)))
+                .collect::<HashMap<_, _>>();
+            Value::Object(Rc::new(RefCell::new(vals)))
+        }
+    }
 }
 
 pub fn process_src(src: &str, context: &Context) -> String {
@@ -179,6 +240,8 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
             .collect();
         let query = Value::Object(Rc::new(RefCell::new(query_map)));
         env_mut.define("QUERY", query);
+
+        env_mut.define("BODY", context.body.clone());
 
         let log = Value::Function(Function {
             params: vec!["value".to_string()],

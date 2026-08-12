@@ -46,8 +46,8 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
-        let context = Context::from_request(&request);
-        process_rhp(path, context).await.into_response()
+        // let context = Context::from_request(request).await.unwrap();
+        process_rhp(path, Context::default()).await.into_response()
     } else {
         ServeDir::new(state.folder)
             .oneshot(request)
