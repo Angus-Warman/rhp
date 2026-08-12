@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::{
-    Router, extract::Request, http::StatusCode, response::Html, routing::{any, get_service},
+    Router, extract::Request, http::StatusCode,
+    response::{Html, IntoResponse, Response}, routing::{any},
 };
+use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
@@ -26,22 +28,30 @@ pub async fn run_server(port: u16, folder: PathBuf, _db_conn: &str) {
 fn build_router() -> Router {
     let app = Router::new()
         .route("/{*path}", any(rhp_handler))
-        .fallback_service(get_service(ServeDir::new("public")))
         .layer(TraceLayer::new_for_http());
 
     app
 }
 
-async fn rhp_handler(request: Request) -> Result<Html<String>, StatusCode> {
-    let path = "./public/".to_string() + request.uri().path();
-    if !path.ends_with(".rhp") {
-        return Err(StatusCode::NOT_FOUND);
+async fn rhp_handler(request: Request) -> Response {
+    let path = request.uri().path();
+
+    if Path::new(path).extension().map_or(false, |ext| ext == "rhp") {
+        process_rhp(path).await.into_response()
+    } else {
+        ServeDir::new("public")
+            .oneshot(request)
+            .await
+            .into_response()
     }
-    let src = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    let output = process_src(&src);
-    Ok(Html(output))
+}
+
+async fn process_rhp(path: &str) -> Response {
+    let path = "./public/".to_string() + path;
+    match tokio::fs::read_to_string(path).await {
+        Ok(src) => Html(process_src(&src)).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 #[cfg(test)]
