@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::{path::{Path, PathBuf}};
 
 use axum::{
     Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any,
@@ -7,7 +7,7 @@ use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::process::{process_src, Method};
+use crate::process::{process_src, Context};
 
 mod ast;
 mod eval;
@@ -46,9 +46,8 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
-        process_rhp(path, Method::from_str(request.method().as_str()))
-            .await
-            .into_response()
+        let context = Context::from_request(&request);
+        process_rhp(path, context).await.into_response()
     } else {
         ServeDir::new(state.folder)
             .oneshot(request)
@@ -57,9 +56,9 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn process_rhp(path: PathBuf, method: Method) -> Response {
+async fn process_rhp(path: PathBuf, context: Context) -> Response {
     match tokio::fs::read_to_string(path).await {
-        Ok(src) => Html(process_src(&src, method)).into_response(),
+        Ok(src) => Html(process_src(&src, &context)).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }

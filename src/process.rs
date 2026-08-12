@@ -1,11 +1,53 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use axum::http::Request;
+
 use crate::{eval::Evaluator, lexer, parser::Parser, value::{
     self, Env, Function, FunctionBody::{self}, Value,
 }};
 
-pub fn process_src(src: &str, request_method: Method) -> String {
-    let env = setup_env();
+#[derive(Debug, Clone, PartialEq)]
+pub struct Context {
+    pub method: Method,
+    pub query:  HashMap<String, String>,
+}
+
+impl Context {
+    pub fn from_request<B>(request: &Request<B>) -> Self {
+        Self {
+            method: Method::from_str(request.method().as_str()),
+            query:  parse_url_query(request.uri().query()),
+        }
+    }
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            method: Method::All,
+            query:  HashMap::new(),
+        }
+    }
+}
+
+fn parse_url_query(query: Option<&str>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Some(q) = query {
+        for pair in q.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            match pair.split_once('=') {
+                Some((k, v)) => { map.insert(k.to_string(), v.to_string()); }
+                None         => { map.insert(pair.to_string(), String::new()); }
+            }
+        }
+    }
+    map
+}
+
+pub fn process_src(src: &str, context: &Context) -> String {
+    let env = setup_env(context);
     let mut output = "".to_string();
 
     let sections = split_src(src);
@@ -13,7 +55,7 @@ pub fn process_src(src: &str, request_method: Method) -> String {
     for section in sections {
         match section {
             Section::Html(html) => output += &html,
-            Section::Code { code, method } if method.matches(&request_method) => {
+            Section::Code { code, method } if method.matches(&context.method) => {
                 let result = process_script_section(env.clone(), &code);
                 output += &result;
             },
@@ -125,12 +167,18 @@ fn split_src(src: &str) -> Vec<Section> {
     sections
 }
 
-fn setup_env() -> Rc<RefCell<Env>> {
+fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
     let env = Env::new_root();
 
     { // Scopes env_mut
         let mut env_mut = env.borrow_mut();
         env_mut.define("VERSION", value::Value::String("0.0.1".to_string()));
+
+        let query_map: HashMap<String, Value> = context.query.iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+        let query = Value::Object(Rc::new(RefCell::new(query_map)));
+        env_mut.define("QUERY", query);
 
         let log = Value::Function(Function {
             params: vec!["value".to_string()],

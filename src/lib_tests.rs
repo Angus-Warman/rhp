@@ -39,11 +39,9 @@ async fn test_method_routing_put() {
 }
 
 #[tokio::test]
-async fn test_method_routing_mismatch() {
+async fn test_query_global() {
     let server = test_server();
-    let response = server.get("/methods.rhp").await;
+    let response = server.put("/query.rhp?id=123").await;
     response.assert_status_ok();
-    let body = response.text();
-    assert!(!body.contains("put"), "GET response must not include the PUT block: {body:?}");
-    assert!(!body.contains("post"), "GET response must not include the POST block: {body:?}");
+    response.assert_text("123");
 }

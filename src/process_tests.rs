@@ -1,8 +1,12 @@
 use super::*;
 
 fn test_process(script: &str) -> String {
-    let env = setup_env();
+    let env = setup_env(&Context::default());
     process_script_section(env, script)
+}
+
+fn ctx(method: Method) -> Context {
+    Context { method, query: HashMap::new() }
 }
 
 #[test]
@@ -36,16 +40,16 @@ fn test_console_log() {
 #[test]
 fn test_method_filtered_sections() {
     let src = r#"<rhp method="PUT">return "put"</rhp><rhp method="POST">return "post"</rhp>"#;
-    assert_eq!(process_src(src, Method::Post), "post");
-    assert_eq!(process_src(src, Method::Put), "put");
-    assert_eq!(process_src(src, Method::Get), "");
+    assert_eq!(process_src(src, &ctx(Method::Post)), "post");
+    assert_eq!(process_src(src, &ctx(Method::Put)), "put");
+    assert_eq!(process_src(src, &ctx(Method::Get)), "");
 }
 
 #[test]
 fn test_unfiltered_section_runs_all_methods() {
     let src = r#"<rhp>return "always"</rhp>"#;
-    assert_eq!(process_src(src, Method::Get), "always");
-    assert_eq!(process_src(src, Method::Post), "always");
+    assert_eq!(process_src(src, &ctx(Method::Get)), "always");
+    assert_eq!(process_src(src, &ctx(Method::Post)), "always");
 }
 
 #[test]
@@ -89,4 +93,45 @@ fn test_array_value() {
 #[test]
 fn test_function_value_display() {
     assert_eq!(test_process("return (a) => a"), "[function]");
+}
+
+#[test]
+fn test_context_from_request() {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/foo.rhp?id=123&name=hello")
+        .body(())
+        .unwrap();
+    let context = Context::from_request(&request);
+    assert_eq!(context.method, Method::Post);
+    assert_eq!(context.query.get("id").map(String::as_str), Some("123"));
+    assert_eq!(context.query.get("name").map(String::as_str), Some("hello"));
+    assert_eq!(context.query.len(), 2);
+}
+
+#[test]
+fn test_context_from_request_without_query() {
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/foo.rhp")
+        .body(())
+        .unwrap();
+    let context = Context::from_request(&request);
+    assert_eq!(context.method, Method::Get);
+    assert!(context.query.is_empty());
+}
+
+#[test]
+fn test_query_global_empty() {
+    assert_eq!(test_process("return QUERY"), "{}");
+}
+
+#[test]
+fn test_query_global_populated() {
+    let context = Context {
+        method: Method::Get,
+        query:  HashMap::from([("id".to_string(), "123".to_string())]),
+    };
+    let env = setup_env(&context);
+    assert_eq!(process_script_section(env, "return QUERY.id"), "123");
 }
