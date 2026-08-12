@@ -1,4 +1,4 @@
-use axum::{Router, extract::Request, response::Html, routing::get_service};
+use axum::{Router, extract::Request, response::Html, routing::{get, get_service}};
 use tower_http::services::ServeDir;
 
 use crate::process::process_src;
@@ -20,7 +20,7 @@ pub async fn run_server() {
 
 fn build_router() -> Router {
     let app = Router::new()
-    .route("/*.rhp", get_service(rhp_handler))
+    .route("/{*path}.rhp", get(rhp_handler))
     .fallback_service(get_service(ServeDir::new("public")));
 
     app
