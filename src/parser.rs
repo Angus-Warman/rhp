@@ -461,6 +461,28 @@ impl Parser {
                 Ok(Spanned::new(Expr::Array(items), span.start..end))
             }
 
+            Some(Token::LBrace) => {
+                self.advance();
+                let mut pairs = Vec::new();
+                while self.peek() != Some(&Token::RBrace) && !self.is_at_end() {
+                    let key = match self.peek().cloned() {
+                        Some(Token::Ident(name)) => { self.advance(); name }
+                        Some(Token::StringDouble(s) | Token::StringSingle(s)) => { self.advance(); s }
+                        _ => return Err(ParseError {
+                            message: "expected object key".to_string(),
+                            span:    self.current_span(),
+                        }),
+                    };
+                    self.expect(&Token::Colon, "expected `:` after object key");
+                    let value = self.parse_assign()?;
+                    pairs.push((key, value));
+                    if !self.eat(&Token::Comma) { break; }
+                }
+                let end = self.current_span().end;
+                self.expect(&Token::RBrace, "expected `}`");
+                Ok(Spanned::new(Expr::Object(pairs), span.start..end))
+            }
+
             _ => {
                 let span = self.current_span();
                 Err(ParseError {

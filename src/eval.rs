@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use crate::ast::*;
 use crate::value::*;
@@ -203,6 +204,15 @@ impl Evaluator {
                     vals.push(self.eval_expr(item, env.clone())?);
                 }
                 Ok(Value::Array(Rc::new(RefCell::new(vals))))
+            }
+
+            Expr::Object(pairs) => {
+                let map = Rc::new(RefCell::new(HashMap::new()));
+                for (key, expr) in pairs {
+                    let value = self.eval_expr(expr, env.clone())?;
+                    map.borrow_mut().insert(key.clone(), value);
+                }
+                Ok(Value::Object(map))
             }
 
             Expr::Prefix { op, expr: inner } => {

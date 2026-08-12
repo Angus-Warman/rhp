@@ -61,11 +61,32 @@ fn test_split_src_parses_method_attr() {
     );
 }
 
-// #[test]
-// fn test_object_prop() {
-//     assert_eq!(evaluate(r"
-//         let a = {}
-//         a.b = 1
-//         return a
-//     "), "{ b: 1 }");
-// }
+#[test]
+fn test_object_prop() {
+    assert_eq!(test_process(r"
+        let a = {}
+        a.b = 1
+        return a
+    "), "{ b: 1 }");
+}
+
+#[test]
+fn test_null_value() {
+    assert_eq!(test_process("return null"), "null");
+}
+
+#[test]
+fn test_bool_values() {
+    assert_eq!(test_process("return true"), "true");
+    assert_eq!(test_process("return false"), "false");
+}
+
+#[test]
+fn test_array_value() {
+    assert_eq!(test_process("return [1, 2, 3]"), "[1, 2, 3]");
+}
+
+#[test]
+fn test_function_value_display() {
+    assert_eq!(test_process("return (a) => a"), "[function]");
+}

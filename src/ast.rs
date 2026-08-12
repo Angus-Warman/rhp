@@ -45,6 +45,9 @@ pub enum Expr {
     // Array literal: [a, b, c]
     Array(Vec<SpannedExpr>),
 
+    // Object literal: { a: 1, b: "x" }
+    Object(Vec<(String, SpannedExpr)>),
+
     // Arrow function: (a, b) => expr  |  (a, b) => { stmts }
     Arrow { params: Vec<String>, body: ArrowBody },
 

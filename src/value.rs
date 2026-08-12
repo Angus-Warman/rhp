@@ -148,10 +148,15 @@ impl Value {
                 format!("[{}]", items.join(", "))
             }
             Value::Object(o)   => {
-                let pairs: Vec<String> = o.borrow().iter()
-                    .map(|(k, v)| format!("{}: {}", k, v.display()))
+                let mut pairs: Vec<(String, String)> = o.borrow().iter()
+                    .map(|(k, v)| (k.clone(), v.display()))
                     .collect();
-                format!("{{{}}}", pairs.join(", "))
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                if pairs.is_empty() {
+                    "{}".to_string()
+                } else {
+                    format!("{{ {} }}", pairs.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", "))
+                }
             }
             Value::Function(_) => "[function]".to_string(),
         }
