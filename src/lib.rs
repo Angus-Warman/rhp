@@ -1,4 +1,10 @@
-use axum::{Router, extract::Request, response::Html, routing::{get, get_service}};
+use axum::{
+    Router,
+    extract::Request,
+    http::StatusCode,
+    response::Html,
+    routing::{get, get_service},
+};
 use tower_http::services::ServeDir;
 
 use crate::process::process_src;
@@ -20,17 +26,20 @@ pub async fn run_server() {
 
 fn build_router() -> Router {
     let app = Router::new()
-    .route("/{*path}.rhp", get(rhp_handler))
+    .route("/{*path}", get(rhp_handler))
     .fallback_service(get_service(ServeDir::new("public")));
 
     app
 }
 
-async fn rhp_handler(request: Request) -> Html<String> {
+async fn rhp_handler(request: Request) -> Result<Html<String>, StatusCode> {
     let path = "./public/".to_string() + request.uri().path();
-    let src = tokio::fs::read_to_string(path).await.unwrap();
+    if !path.ends_with(".rhp") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let src = tokio::fs::read_to_string(path).await.map_err(|_| StatusCode::NOT_FOUND)?;
     let output = process_src(&src);
-    Html(output)
+    Ok(Html(output))
 }
 
 #[cfg(test)]
