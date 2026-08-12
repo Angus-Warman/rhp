@@ -4,8 +4,7 @@ use crate::{eval::Evaluator, lexer, parser::Parser, value::{
     self, Env, Function, FunctionBody::{self}, Value,
 }};
 
-#[allow(dead_code)]
-pub fn process_src(src: &str, method: &str) -> String {
+pub fn process_src(src: &str, request_method: Method) -> String {
     let env = setup_env();
     let mut output = "".to_string();
 
@@ -14,11 +13,7 @@ pub fn process_src(src: &str, method: &str) -> String {
     for section in sections {
         match section {
             Section::Html(html) => output += &html,
-            Section::Code { code, method: None } => {
-                let result = process_script_section(env.clone(), &code);
-                output += &result;
-            },
-            Section::Code { code, method: Some(m) } if m.eq_ignore_ascii_case(method) => {
+            Section::Code { code, method } if method.matches(&request_method) => {
                 let result = process_script_section(env.clone(), &code);
                 output += &result;
             },
@@ -29,23 +24,60 @@ pub fn process_src(src: &str, method: &str) -> String {
     return output;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Get,
+    Head,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Options,
+    All,
+}
+
+impl Method {
+    pub fn from_str(s: &str) -> Method {
+        match s.to_ascii_uppercase().as_str() {
+            "GET"     => Method::Get,
+            "HEAD"    => Method::Head,
+            "POST"    => Method::Post,
+            "PUT"     => Method::Put,
+            "DELETE"  => Method::Delete,
+            "PATCH"   => Method::Patch,
+            "OPTIONS" => Method::Options,
+            _         => Method::All,
+        }
+    }
+
+    fn matches(&self, request_method: &Method) -> bool {
+        matches!(self, Method::All) || self == request_method
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Section {
     Html(String),
-    Code { code: String, method: Option<String> },
+    Code { code: String, method: Method },
 }
 
-fn parse_method(attrs: &str) -> Option<String> {
+fn parse_method(attrs: &str) -> Method {
     const PREFIX: &str = "method=";
-    let i = attrs.find(PREFIX)?;
+    let Some(i) = attrs.find(PREFIX) else {
+        return Method::All;
+    };
     let rest = attrs[i + PREFIX.len()..].trim_start();
-    let quote = rest.chars().next()?;
+    let Some(quote) = rest.chars().next() else {
+        return Method::All;
+    };
     if quote != '"' && quote != '\'' {
-        return None;
+        return Method::All;
     }
     let rest = &rest[1..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_string())
+    let Some(end) = rest.find(quote) else {
+        return Method::All;
+    };
+    Method::from_str(&rest[..end])
 }
 
 fn split_src(src: &str) -> Vec<Section> {
@@ -68,7 +100,7 @@ fn split_src(src: &str) -> Vec<Section> {
                 let after_open = &rest[start + "<rhp".len()..];
                 let (method, body) = match after_open.find('>') {
                     Some(gt) => (parse_method(&after_open[..gt]), &after_open[gt + 1..]),
-                    None => (None, after_open),
+                    None => (Method::All, after_open),
                 };
 
                 match body.find("</rhp>") {

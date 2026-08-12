@@ -7,7 +7,7 @@ use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
-use crate::process::process_src;
+use crate::process::{process_src, Method};
 
 mod ast;
 mod eval;
@@ -46,7 +46,9 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
-        process_rhp(path, request.method().as_str()).await.into_response()
+        process_rhp(path, Method::from_str(request.method().as_str()))
+            .await
+            .into_response()
     } else {
         ServeDir::new(state.folder)
             .oneshot(request)
@@ -55,7 +57,7 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn process_rhp(path: PathBuf, method: &str) -> Response {
+async fn process_rhp(path: PathBuf, method: Method) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => Html(process_src(&src, method)).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
