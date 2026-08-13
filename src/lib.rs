@@ -56,7 +56,12 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
 async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => {
-            let context = Context::from_request(request).await.unwrap();
+            let context = match Context::from_request(request).await {
+                Ok(context) => context,
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+                }
+            };
             let html = process_src(src, context, conn).await;
             Html(html).into_response()
         },

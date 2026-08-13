@@ -71,7 +71,7 @@ async fn test_body_global_form() {
         .form(&[("color", "red"), ("color", "blue")])
         .await;
     response.assert_status_ok();
-    response.assert_text("{ color: [red], colors: [red, blue] }");
+    response.assert_text("{ color: red, colors: [red, blue] }");
 }
 
 #[tokio::test]
