@@ -283,3 +283,11 @@ async fn test_db_ping() {
     let env = setup_env(&context, test_conn().await);
     assert_eq!(process_script_section(env, "return DB.PING()").await, "pong");
 }
+
+
+#[tokio::test]
+async fn test_db_query() {
+    assert_eq!(test_process(r#"
+        return DB.QUERY("SELECT 2")
+    "#).await, r#"[{"2":null}]"#);
+}

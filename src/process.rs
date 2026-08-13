@@ -308,7 +308,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("console", console);
 
-        // Define db.ping
+        // Define db
         let ping_conn = conn.clone();
         let ping = Value::Function(Function {
             params: vec!["value".to_string()],
@@ -323,9 +323,31 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             captured: Env::new_root(),
         });
 
+        let query_conn = conn.clone();
+        let query = Value::Function(Function { 
+            params: vec!["sql".to_string()],
+            body: FunctionBody::Native(Arc::new(move |args| {
+                let conn = query_conn.clone();
+                Box::pin(async move {
+                    let sql = match args.first() {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(other) => return Ok(Value::String(format!(
+                            "DB.QUERY: expected a SQL string, got {}", other.type_name()
+                        ))),
+                        None => return Ok(Value::String("DB.QUERY: expected a SQL string".to_string())),
+                    };
+                    let res = conn.query(&sql).await;
+                    let text = res.unwrap(); // On error, should return { ok: false, error: msg }
+                    Ok(Value::String(text))
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
         let db = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
             map.insert("PING".to_string(), ping);
+            map.insert("QUERY".to_string(), query); 
             map
         })));
 
