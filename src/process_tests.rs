@@ -179,9 +179,9 @@ async fn test_body_form() {
         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "a=1&b=hello"),
     ).await.unwrap();
     assert_eq!(eval_with_context(&context, "return BODY.a").await, "1");
-    assert_eq!(eval_with_context(&context, "return BODY.as").await, "[1]");
+    assert_eq!(eval_with_context(&context, "return BODY.as").await, "[\"1\"]");
     assert_eq!(eval_with_context(&context, "return BODY.b").await, "hello");
-    assert_eq!(eval_with_context(&context, "return BODY.bs").await, "[hello]");
+    assert_eq!(eval_with_context(&context, "return BODY.bs").await, "[\"hello\"]");
     assert_eq!(eval_with_context(&context, "return BODY.c").await, "null");
 }
 
@@ -191,7 +191,7 @@ async fn test_body_form_duplicate_values() {
         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "color=red&color=blue"),
     ).await.unwrap();
     assert_eq!(eval_with_context(&context, "return BODY.color").await, "red"); // Gets the first
-    assert_eq!(eval_with_context(&context, "return BODY.colors").await, "[red, blue]");
+    assert_eq!(eval_with_context(&context, "return BODY.colors").await, "[\"red\", \"blue\"]");
 }
 
 #[tokio::test]
@@ -272,7 +272,7 @@ async fn test_try_syntax() {
         a.error = 'oh no'
         try a
         return 'task complete'
-    ").await, "{ b: 1, error: oh no }"); // TODO Should this have quotes?
+    ").await, "{ b: 1, error: \"oh no\" }");
 }
 
 #[tokio::test]

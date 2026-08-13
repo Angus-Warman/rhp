@@ -52,7 +52,7 @@ async fn test_body_global_text() {
     let server = test_server().await;
     let response = server.post("/body.rhp").text("hello world").await;
     response.assert_status_ok();
-    response.assert_text("{ text: hello world }");
+    response.assert_text(r#"{ text: "hello world" }"#);
 }
 
 #[tokio::test]
@@ -60,7 +60,7 @@ async fn test_body_global_json() {
     let server = test_server().await;
     let response = server.post("/body.rhp").json(&serde_json::json!({"name": "rhp"})).await;
     response.assert_status_ok();
-    response.assert_text("{ name: rhp }");
+    response.assert_text(r#"{ name: "rhp" }"#);
 }
 
 #[tokio::test]
@@ -71,7 +71,7 @@ async fn test_body_global_form() {
         .form(&[("color", "red"), ("color", "blue")])
         .await;
     response.assert_status_ok();
-    response.assert_text("{ color: red, colors: [red, blue] }");
+    response.assert_text(r#"{ color: "red", colors: ["red", "blue"] }"#);
 }
 
 #[tokio::test]

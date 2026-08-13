@@ -162,12 +162,12 @@ impl Value {
             }
             Value::String(s)   => s.clone(),
             Value::Array(a)    => {
-                let items: Vec<String> = a.lock().unwrap().iter().map(|v| v.display()).collect();
+                let items: Vec<String> = a.lock().unwrap().iter().map(|v| v.display_in_container()).collect();
                 format!("[{}]", items.join(", "))
             }
             Value::Object(o)   => {
                 let mut pairs: Vec<(String, String)> = o.lock().unwrap().iter()
-                    .map(|(k, v)| (k.clone(), v.display()))
+                    .map(|(k, v)| (k.clone(), v.display_in_container()))
                     .collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
                 if pairs.is_empty() {
@@ -177,6 +177,13 @@ impl Value {
                 }
             }
             Value::Function(_) => "[function]".to_string(),
+        }
+    }
+
+    fn display_in_container(&self) -> String {
+        match self {
+            Value::String(s) => format!("\"{}\"", s),
+            other            => other.display(),
         }
     }
 }
