@@ -219,13 +219,11 @@ fn test_query_global_empty() {
     assert_eq!(test_process("return QUERY"), "{}");
 }
 
-#[test]
-fn test_query_global_populated() {
-    let context = Context {
-        method: Method::Get,
-        query:  HashMap::from([("id".to_string(), "123".to_string())]),
-        body:   empty_object(),
-    };
+#[tokio::test]
+async fn test_query_object() {
+    let context = Context::from_request(
+        request_with_body("GET", "/index.rhp?id=123&name=hello", None, ""),
+    ).await.unwrap();
     let env = setup_env(&context);
     assert_eq!(process_script_section(env, "return QUERY.id"), "123");
 }
