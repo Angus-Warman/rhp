@@ -22,6 +22,18 @@ pub enum ContextError {
     Form(serde_urlencoded::de::Error),
 }
 
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContextError::Body(e) => write!(f, "reading request body: {e}"),
+            ContextError::Json(e) => write!(f, "parsing json body: {e}"),
+            ContextError::Form(e) => write!(f, "parsing form body: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ContextError {}
+
 impl Context {
     pub async fn from_request(request: Request) -> Result<Self, ContextError> {
         let (parts, body) = request.into_parts();
@@ -126,7 +138,7 @@ pub fn process_src(src: &str, context: &Context) -> String {
         }
     }
 
-    return output;
+    output
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

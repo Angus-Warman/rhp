@@ -572,7 +572,7 @@ impl Evaluator {
     ) -> EvalResult {
         match &func.body {
             FunctionBody::Native(f) => {
-                f(args).map_err(|e| Signal::Error(e))
+                f(args).map_err(Signal::Error)
             }
 
             FunctionBody::Block(stmts) => {

@@ -34,11 +34,10 @@ impl Env {
             self.vars.insert(name.to_string(), value);
             return;
         }
-        if let Some(parent) = &self.parent {
-            if parent.borrow().has(name) {
-                parent.borrow_mut().set(name, value);
-                return;
-            }
+        if let Some(parent) = &self.parent
+            && parent.borrow().has(name) {
+            parent.borrow_mut().set(name, value);
+            return;
         }
         self.vars.insert(name.to_string(), value);
     }
@@ -50,7 +49,7 @@ impl Env {
 
     fn has(&self, name: &str) -> bool {
         if self.vars.contains_key(name) { return true; }
-        self.parent.as_ref().map_or(false, |p| p.borrow().has(name))
+        self.parent.as_ref().is_some_and(|p| p.borrow().has(name))
     }
 }
 

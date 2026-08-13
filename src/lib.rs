@@ -29,25 +29,20 @@ struct AppState {
     folder: PathBuf,
 }
 
-
 fn build_router(folder: PathBuf) -> Router {
-    let state = AppState {
-        folder: folder,
-    };
+    let state = AppState { folder };
 
-    let app = Router::new()
+    Router::new()
         .route("/{*path}", any(rhp_handler))
         .with_state(state)
-        .layer(TraceLayer::new_for_http());
-
-    app
+        .layer(TraceLayer::new_for_http())
 }
 
 #[debug_handler]
 async fn rhp_handler(State(state): State<AppState>, request: Request) -> Response {
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
-    if Path::new(&path).extension().map_or(false, |ext| ext == "rhp") {
+    if Path::new(&path).extension().is_some_and(|ext| ext == "rhp") {
         process_rhp(path, request).await.into_response()
     } else {
         ServeDir::new(state.folder)
