@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use anyhow::Result;
 use sqlx::AnyPool;
 
@@ -11,9 +9,9 @@ fn normalise_dsn(dsn: &str) -> String {
     if dsn.starts_with("postgres") {
         dsn.into()
     } else if dsn == ":memory:" {
-        format!("sqlite::memory:").into()
+        "sqlite::memory:".into()
     } else {
-        format!("sqlite://{dsn}").into()
+        format!("sqlite://{dsn}")
     }
 }
 

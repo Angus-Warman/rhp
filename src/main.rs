@@ -39,6 +39,6 @@ async fn main() -> Result<()> {
         .with_max_level(level)
         .init();
 
-    run_server(port, folder, &db_conn).await;
+    run_server(port, folder, &db_conn).await?;
     Ok(())
 }
