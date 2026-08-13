@@ -54,7 +54,7 @@ impl Evaluator {
     // Entry point: evaluate a list of statements in a given environment
     pub fn eval_stmts(
         &mut self,
-        stmts: &[SpannedStmt],
+        stmts: &[Stmt],
         env:   Rc<RefCell<Env>>,
     ) -> Result<(), EvalError> {
         for stmt in stmts {
@@ -79,11 +79,11 @@ impl Evaluator {
 
     // ---- Statements ----
 
-    fn eval_stmt(&mut self, stmt: &SpannedStmt, env: Rc<RefCell<Env>>) -> StmtResult {
+    fn eval_stmt(&mut self, stmt: &Stmt, env: Rc<RefCell<Env>>) -> StmtResult {
         match &stmt.node {
-            Stmt::Error => Ok(()), // already reported at parse time
+            RawStmt::Error => Ok(()), // already reported at parse time
 
-            Stmt::VarDecl { kind: _, name, init } => {
+            RawStmt::VarDecl { kind: _, name, init } => {
                 let value = match init {
                     Some(expr) => self.eval_expr(expr, env.clone())?,
                     None       => Value::Null,
@@ -92,7 +92,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Stmt::FunctionDecl { name, params, body } => {
+            RawStmt::FunctionDecl { name, params, body } => {
                 let func = Value::Function(Function {
                     params:   params.clone(),
                     body:     FunctionBody::Block(body.clone()),
@@ -102,7 +102,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Stmt::If { cond, then, otherwise } => {
+            RawStmt::If { cond, then, otherwise } => {
                 let val = self.eval_expr(cond, env.clone())?;
                 if val.is_truthy() {
                     let child = Env::new_child(env.clone());
@@ -114,7 +114,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Stmt::While { cond, body } => {
+            RawStmt::While { cond, body } => {
                 loop {
                     let val = self.eval_expr(cond, env.clone())?;
                     if !val.is_truthy() { break; }
@@ -129,7 +129,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Stmt::For { init, cond, update, body } => {
+            RawStmt::For { init, cond, update, body } => {
                 let loop_env = Env::new_child(env.clone());
 
                 if let Some(init_stmt) = init {
@@ -157,7 +157,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Stmt::Return(expr) => {
+            RawStmt::Return(expr) => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e, env)?,
                     None    => Value::Null,
@@ -165,17 +165,17 @@ impl Evaluator {
                 Err(Signal::Return(value))
             }
 
-            Stmt::Break    => Err(Signal::Break),
-            Stmt::Continue => Err(Signal::Continue),
+            RawStmt::Break    => Err(Signal::Break),
+            RawStmt::Continue => Err(Signal::Continue),
 
-            Stmt::Expr(expr) => {
+            RawStmt::Expr(expr) => {
                 self.eval_expr(expr, env)?;
                 Ok(())
             }
         }
     }
 
-    fn eval_block(&mut self, stmts: &[SpannedStmt], env: Rc<RefCell<Env>>) -> StmtResult {
+    fn eval_block(&mut self, stmts: &[Stmt], env: Rc<RefCell<Env>>) -> StmtResult {
         for stmt in stmts {
             self.eval_stmt(stmt, env.clone())?;
         }
@@ -184,21 +184,21 @@ impl Evaluator {
 
     // ---- Expressions ----
 
-    fn eval_expr(&mut self, expr: &SpannedExpr, env: Rc<RefCell<Env>>) -> EvalResult {
+    fn eval_expr(&mut self, expr: &Expr, env: Rc<RefCell<Env>>) -> EvalResult {
         match &expr.node {
-            Expr::Null        => Ok(Value::Null),
-            Expr::Bool(b)     => Ok(Value::Bool(*b)),
-            Expr::Number(n)   => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
-            Expr::StringLit(s) => Ok(Value::String(s.trim_matches(|c| c == '"' || c == '\'').to_string())),
+            RawExpr::Null        => Ok(Value::Null),
+            RawExpr::Bool(b)     => Ok(Value::Bool(*b)),
+            RawExpr::Number(n)   => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
+            RawExpr::StringLit(s) => Ok(Value::String(s.trim_matches(|c| c == '"' || c == '\'').to_string())),
 
-            Expr::Ident(name) => {
+            RawExpr::Ident(name) => {
                 env.borrow().get(name).ok_or_else(|| Signal::Error(EvalError::new(
                     format!("undefined variable `{}`", name),
                     expr.span.clone(),
                 )))
             }
 
-            Expr::Array(items) => {
+            RawExpr::Array(items) => {
                 let mut vals = Vec::new();
                 for item in items {
                     vals.push(self.eval_expr(item, env.clone())?);
@@ -206,7 +206,7 @@ impl Evaluator {
                 Ok(Value::Array(Rc::new(RefCell::new(vals))))
             }
 
-            Expr::Object(pairs) => {
+            RawExpr::Object(pairs) => {
                 let map = Rc::new(RefCell::new(HashMap::new()));
                 for (key, expr) in pairs {
                     let value = self.eval_expr(expr, env.clone())?;
@@ -215,23 +215,23 @@ impl Evaluator {
                 Ok(Value::Object(map))
             }
 
-            Expr::Prefix { op, expr: inner } => {
+            RawExpr::Prefix { op, expr: inner } => {
                 self.eval_prefix(op, inner, env, &expr.span)
             }
 
-            Expr::Postfix { op, expr: inner } => {
+            RawExpr::Postfix { op, expr: inner } => {
                 self.eval_postfix(op, inner, env, &expr.span)
             }
 
-            Expr::Binary { op, left, right } => {
+            RawExpr::Binary { op, left, right } => {
                 self.eval_binary(op, left, right, env, &expr.span)
             }
 
-            Expr::Assign { op, target, value } => {
+            RawExpr::Assign { op, target, value } => {
                 self.eval_assign(op, target, value, env, &expr.span)
             }
 
-            Expr::Ternary { cond, then, otherwise } => {
+            RawExpr::Ternary { cond, then, otherwise } => {
                 let c = self.eval_expr(cond, env.clone())?;
                 if c.is_truthy() {
                     self.eval_expr(then, env)
@@ -240,22 +240,22 @@ impl Evaluator {
                 }
             }
 
-            Expr::Member { object, property } => {
+            RawExpr::Member { object, property } => {
                 let obj = self.eval_expr(object, env)?;
                 self.eval_member(&obj, property, &expr.span)
             }
 
-            Expr::Index { object, index } => {
+            RawExpr::Index { object, index } => {
                 let obj = self.eval_expr(object, env.clone())?;
                 let idx = self.eval_expr(index, env)?;
                 self.eval_index(&obj, &idx, &expr.span)
             }
 
-            Expr::Call { callee, args } => {
+            RawExpr::Call { callee, args } => {
                 self.eval_call(callee, args, env, &expr.span)
             }
 
-            Expr::Arrow { params, body } => {
+            RawExpr::Arrow { params, body } => {
                 let func = Function {
                     params:   params.clone(),
                     body:     match body {
@@ -267,7 +267,7 @@ impl Evaluator {
                 Ok(Value::Function(func))
             }
 
-            Expr::HtmlBlock(stmts) => {
+            RawExpr::HtmlBlock(stmts) => {
                 // Evaluate stmts; any output they push goes to self.output
                 let child = Env::new_child(env);
                 self.eval_block(stmts, child)
@@ -288,7 +288,7 @@ impl Evaluator {
     fn eval_prefix(
         &mut self,
         op:   &PrefixOp,
-        expr: &SpannedExpr,
+        expr: &Expr,
         env:  Rc<RefCell<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
@@ -317,7 +317,7 @@ impl Evaluator {
     fn eval_postfix(
         &mut self,
         op:   &PostfixOp,
-        expr: &SpannedExpr,
+        expr: &Expr,
         env:  Rc<RefCell<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
@@ -330,7 +330,7 @@ impl Evaluator {
     // Add `delta` to a numeric lvalue and write it back. Returns the new value.
     fn numeric_mutate(
         &mut self,
-        target: &SpannedExpr,
+        target: &Expr,
         delta:  f64,
         env:    Rc<RefCell<Env>>,
         span:   &std::ops::Range<usize>,
@@ -352,8 +352,8 @@ impl Evaluator {
     fn eval_binary(
         &mut self,
         op:    &BinOp,
-        left:  &SpannedExpr,
-        right: &SpannedExpr,
+        left:  &Expr,
+        right: &Expr,
         env:   Rc<RefCell<Env>>,
         span:  &std::ops::Range<usize>,
     ) -> EvalResult {
@@ -403,8 +403,8 @@ impl Evaluator {
     fn eval_assign(
         &mut self,
         op:     &AssignOp,
-        target: &SpannedExpr,
-        value:  &SpannedExpr,
+        target: &Expr,
+        value:  &Expr,
         env:    Rc<RefCell<Env>>,
         span:   &std::ops::Range<usize>,
     ) -> EvalResult {
@@ -433,17 +433,17 @@ impl Evaluator {
     // Write a value to an lvalue target: ident, member, or index
     fn write_target(
         &mut self,
-        target:    &SpannedExpr,
+        target:    &Expr,
         value:     Value,
         env:       Rc<RefCell<Env>>,
         span:      &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
         match &target.node {
-            Expr::Ident(name) => {
+            RawExpr::Ident(name) => {
                 env.borrow_mut().set(name, value);
                 Ok(())
             }
-            Expr::Member { object, property } => {
+            RawExpr::Member { object, property } => {
                 let obj = self.eval_expr(object, env)?;
                 match obj {
                     Value::Object(map) => {
@@ -455,7 +455,7 @@ impl Evaluator {
                     ))),
                 }
             }
-            Expr::Index { object, index } => {
+            RawExpr::Index { object, index } => {
                 let obj = self.eval_expr(object, env.clone())?;
                 let idx = self.eval_expr(index, env)?;
                 match (&obj, &idx) {
@@ -544,8 +544,8 @@ impl Evaluator {
 
     fn eval_call(
         &mut self,
-        callee: &SpannedExpr,
-        args:   &[SpannedExpr],
+        callee: &Expr,
+        args:   &[Expr],
         env:    Rc<RefCell<Env>>,
         span:   &std::ops::Range<usize>,
     ) -> EvalResult {

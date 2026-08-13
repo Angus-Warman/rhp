@@ -75,8 +75,8 @@ pub struct Function {
 
 #[derive(Clone)]
 pub enum FunctionBody {
-    Block(Vec<SpannedStmt>),
-    Expr(Box<SpannedExpr>),
+    Block(Vec<Stmt>),
+    Expr(Box<Expr>),
     Native(Rc<dyn Fn(Vec<Value>) -> Result<Value, EvalError>>),
 }
 

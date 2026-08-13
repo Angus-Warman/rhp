@@ -86,13 +86,13 @@ impl Parser {
     //     span
     // }
 
-    pub fn parse(tokens: Vec<SpannedToken>) -> (Vec<SpannedStmt>, Vec<ParseError>) {
+    pub fn parse(tokens: Vec<SpannedToken>) -> (Vec<Stmt>, Vec<ParseError>) {
         let mut p = Parser::new(tokens);
         let stmts = p.parse_block_contents();
         (stmts, p.errors)
     }
 
-    fn parse_block_contents(&mut self) -> Vec<SpannedStmt> {
+    fn parse_block_contents(&mut self) -> Vec<Stmt> {
         let mut stmts = Vec::new();
         while !self.is_at_end() && self.peek() != Some(&Token::RBrace) {
             stmts.push(self.parse_stmt());
@@ -100,14 +100,14 @@ impl Parser {
         stmts
     }
 
-    fn parse_block(&mut self) -> Vec<SpannedStmt> {
+    fn parse_block(&mut self) -> Vec<Stmt> {
         self.expect(&Token::LBrace, "expected `{`");
         let stmts = self.parse_block_contents();
         self.expect(&Token::RBrace, "expected `}`");
         stmts
     }
 
-    fn parse_stmt(&mut self) -> SpannedStmt {
+    fn parse_stmt(&mut self) -> Stmt {
         let start = self.current_span().start;
 
         let result = match self.peek() {
@@ -119,8 +119,8 @@ impl Parser {
             Some(Token::While)    => self.parse_while(),
             Some(Token::For)      => self.parse_for(),
             Some(Token::Return)   => self.parse_return(),
-            Some(Token::Break)    => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Break) }
-            Some(Token::Continue) => { self.advance(); self.eat(&Token::Semicolon); Ok(Stmt::Continue) }
+            Some(Token::Break)    => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Break) }
+            Some(Token::Continue) => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Continue) }
             Some(Token::HtmlOpen) => self.parse_html_block_stmt(),
             _ => self.parse_expr_stmt(),
         };
@@ -136,12 +136,12 @@ impl Parser {
                 self.errors.push(e);
                 self.synchronize();
                 let end = self.current_span().end;
-                Spanned::new(Stmt::Error, start..end)
+                Spanned::new(RawStmt::Error, start..end)
             }
         }
     }
 
-    fn parse_var_decl(&mut self, kind: VarKind) -> Result<Stmt, ParseError> {
+    fn parse_var_decl(&mut self, kind: VarKind) -> Result<RawStmt, ParseError> {
         self.advance(); // eat let/const/var
         let name = self.expect_ident("expected variable name")?;
         let init = if self.eat(&Token::Assign) {
@@ -150,18 +150,18 @@ impl Parser {
             None
         };
         self.eat(&Token::Semicolon);
-        Ok(Stmt::VarDecl { kind, name, init })
+        Ok(RawStmt::VarDecl { kind, name, init })
     }
 
-    fn parse_function_decl(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_function_decl(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `function`
         let name   = self.expect_ident("expected function name")?;
         let params = self.parse_params()?;
         let body   = self.parse_block();
-        Ok(Stmt::FunctionDecl { name, params, body })
+        Ok(RawStmt::FunctionDecl { name, params, body })
     }
 
-    fn parse_if(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_if(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `if`
         self.expect(&Token::LParen, "expected `(` after `if`");
         let cond = self.parse_expr()?;
@@ -178,19 +178,19 @@ impl Parser {
         } else {
             None
         };
-        Ok(Stmt::If { cond, then, otherwise })
+        Ok(RawStmt::If { cond, then, otherwise })
     }
 
-    fn parse_while(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_while(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `while`
         self.expect(&Token::LParen, "expected `(` after `while`");
         let cond = self.parse_expr()?;
         self.expect(&Token::RParen, "expected `)` after condition");
         let body = self.parse_block();
-        Ok(Stmt::While { cond, body })
+        Ok(RawStmt::While { cond, body })
     }
 
-    fn parse_for(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_for(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `for`
         self.expect(&Token::LParen, "expected `(` after `for`");
 
@@ -220,10 +220,10 @@ impl Parser {
         self.expect(&Token::RParen, "expected `)`");
 
         let body = self.parse_block();
-        Ok(Stmt::For { init, cond, update, body })
+        Ok(RawStmt::For { init, cond, update, body })
     }
 
-    fn parse_return(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_return(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `return`
         let value = if self.peek() == Some(&Token::Semicolon) || self.is_at_end() {
             None
@@ -231,22 +231,22 @@ impl Parser {
             Some(self.parse_expr()?)
         };
         self.eat(&Token::Semicolon);
-        Ok(Stmt::Return(value))
+        Ok(RawStmt::Return(value))
     }
 
-    fn parse_html_block_stmt(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_html_block_stmt(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `<html>`
         let inner = self.parse_block_contents();
         self.expect(&Token::HtmlClose, "expected `</html>`");
         // Wrap in an Expr statement containing HtmlBlock
         let span = self.current_span();
-        Ok(Stmt::Expr(Spanned::new(Expr::HtmlBlock(inner), span)))
+        Ok(RawStmt::Expr(Spanned::new(RawExpr::HtmlBlock(inner), span)))
     }
 
-    fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
+    fn parse_expr_stmt(&mut self) -> Result<RawStmt, ParseError> {
         let expr = self.parse_expr()?;
         self.eat(&Token::Semicolon);
-        Ok(Stmt::Expr(expr))
+        Ok(RawStmt::Expr(expr))
     }
 
     // ---- Helpers ----
@@ -276,12 +276,12 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_expr(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         self.parse_assign()
     }
 
     // Assignment is right-associative so handled separately from Pratt
-    fn parse_assign(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_assign(&mut self) -> Result<Expr, ParseError> {
         let left = self.parse_pratt(0)?;
 
         let op = match self.peek() {
@@ -298,7 +298,7 @@ impl Parser {
             let right = self.parse_assign()?; // right-associative
             let span = merge_spans(&left.span, &right.span);
             return Ok(Spanned::new(
-                Expr::Assign { op, target: Box::new(left), value: Box::new(right) },
+                RawExpr::Assign { op, target: Box::new(left), value: Box::new(right) },
                 span,
             ));
         }
@@ -306,7 +306,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_pratt(&mut self, min_bp: u8) -> Result<SpannedExpr, ParseError> {
+    fn parse_pratt(&mut self, min_bp: u8) -> Result<Expr, ParseError> {
         let mut left = self.parse_unary()?;
 
         loop {
@@ -319,7 +319,7 @@ impl Parser {
                 let otherwise = self.parse_pratt(0)?;
                 let span = merge_spans(&left.span, &otherwise.span);
                 left = Spanned::new(
-                    Expr::Ternary {
+                    RawExpr::Ternary {
                         cond:      Box::new(left),
                         then:      Box::new(then),
                         otherwise: Box::new(otherwise),
@@ -337,7 +337,7 @@ impl Parser {
             let right = self.parse_pratt(r_bp)?;
             let span = merge_spans(&left.span, &right.span);
             left = Spanned::new(
-                Expr::Binary { op, left: Box::new(left), right: Box::new(right) },
+                RawExpr::Binary { op, left: Box::new(left), right: Box::new(right) },
                 span,
             );
         }
@@ -345,7 +345,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_unary(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         let start = self.current_span().start;
 
         let prefix = match self.peek() {
@@ -360,13 +360,13 @@ impl Parser {
             self.advance();
             let expr = self.parse_unary()?;
             let end  = expr.span.end;
-            return Ok(Spanned::new(Expr::Prefix { op, expr: Box::new(expr) }, start..end));
+            return Ok(Spanned::new(RawExpr::Prefix { op, expr: Box::new(expr) }, start..end));
         }
 
         self.parse_postfix()
     }
 
-    fn parse_postfix(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_call()?;
 
         loop {
@@ -375,13 +375,13 @@ impl Parser {
                     let end = self.current_span().end;
                     self.advance();
                     let span = expr.span.start..end;
-                    expr = Spanned::new(Expr::Postfix { op: PostfixOp::PlusPlus, expr: Box::new(expr) }, span);
+                    expr = Spanned::new(RawExpr::Postfix { op: PostfixOp::PlusPlus, expr: Box::new(expr) }, span);
                 }
                 Some(Token::MinusMinus) => {
                     let end = self.current_span().end;
                     self.advance();
                     let span = expr.span.start..end;
-                    expr = Spanned::new(Expr::Postfix { op: PostfixOp::MinusMinus, expr: Box::new(expr) }, span);
+                    expr = Spanned::new(RawExpr::Postfix { op: PostfixOp::MinusMinus, expr: Box::new(expr) }, span);
                 }
                 _ => break,
             }
@@ -390,7 +390,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_call(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_call(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_primary()?;
 
         loop {
@@ -405,14 +405,14 @@ impl Parser {
                     let end = self.current_span().end;
                     self.expect(&Token::RParen, "expected `)` after arguments");
                     let span = expr.span.start..end;
-                    expr = Spanned::new(Expr::Call { callee: Box::new(expr), args }, span);
+                    expr = Spanned::new(RawExpr::Call { callee: Box::new(expr), args }, span);
                 }
                 Some(Token::Dot) => {
                     self.advance();
                     let prop = self.expect_ident("expected property name after `.`")?;
                     let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(0);
                     let span = expr.span.start..end;
-                    expr = Spanned::new(Expr::Member { object: Box::new(expr), property: prop }, span);
+                    expr = Spanned::new(RawExpr::Member { object: Box::new(expr), property: prop }, span);
                 }
                 Some(Token::LBracket) => {
                     self.advance();
@@ -420,7 +420,7 @@ impl Parser {
                     let end   = self.current_span().end;
                     self.expect(&Token::RBracket, "expected `]`");
                     let span = expr.span.start..end;
-                    expr = Spanned::new(Expr::Index { object: Box::new(expr), index: Box::new(index) }, span);
+                    expr = Spanned::new(RawExpr::Index { object: Box::new(expr), index: Box::new(index) }, span);
                 }
                 _ => break,
             }
@@ -429,21 +429,21 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_primary(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         let span = self.current_span();
 
         match self.peek().cloned() {
             Some(Token::Number(n)) => {
                 self.advance();
-                Ok(Spanned::new(Expr::Number(n), span))
+                Ok(Spanned::new(RawExpr::Number(n), span))
             }
             Some(Token::StringDouble(s) | Token::StringSingle(s)) => {
                 self.advance();
-                Ok(Spanned::new(Expr::StringLit(s), span))
+                Ok(Spanned::new(RawExpr::StringLit(s), span))
             }
-            Some(Token::True)  => { self.advance(); Ok(Spanned::new(Expr::Bool(true),  span)) }
-            Some(Token::False) => { self.advance(); Ok(Spanned::new(Expr::Bool(false), span)) }
-            Some(Token::Null)  => { self.advance(); Ok(Spanned::new(Expr::Null,        span)) }
+            Some(Token::True)  => { self.advance(); Ok(Spanned::new(RawExpr::Bool(true),  span)) }
+            Some(Token::False) => { self.advance(); Ok(Spanned::new(RawExpr::Bool(false), span)) }
+            Some(Token::Null)  => { self.advance(); Ok(Spanned::new(RawExpr::Null,        span)) }
 
             Some(Token::Ident(_)) => self.parse_ident_or_arrow(),
 
@@ -458,7 +458,7 @@ impl Parser {
                 }
                 let end = self.current_span().end;
                 self.expect(&Token::RBracket, "expected `]`");
-                Ok(Spanned::new(Expr::Array(items), span.start..end))
+                Ok(Spanned::new(RawExpr::Array(items), span.start..end))
             }
 
             Some(Token::LBrace) => {
@@ -480,7 +480,7 @@ impl Parser {
                 }
                 let end = self.current_span().end;
                 self.expect(&Token::RBrace, "expected `}`");
-                Ok(Spanned::new(Expr::Object(pairs), span.start..end))
+                Ok(Spanned::new(RawExpr::Object(pairs), span.start..end))
             }
 
             _ => {
@@ -497,7 +497,7 @@ impl Parser {
     }
 
     // Single bare ident, could be the start of an arrow: `x => ...`
-    fn parse_ident_or_arrow(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_ident_or_arrow(&mut self) -> Result<Expr, ParseError> {
         let span  = self.current_span();
         let name  = self.expect_ident("expected identifier")?;
 
@@ -505,14 +505,14 @@ impl Parser {
             self.advance(); // eat =>
             let body = self.parse_arrow_body()?;
             let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(span.end);
-            return Ok(Spanned::new(Expr::Arrow { params: vec![name], body }, span.start..end));
+            return Ok(Spanned::new(RawExpr::Arrow { params: vec![name], body }, span.start..end));
         }
 
-        Ok(Spanned::new(Expr::Ident(name), span))
+        Ok(Spanned::new(RawExpr::Ident(name), span))
     }
 
     // `(...)`, either a grouped expr or arrow params
-    fn parse_paren_or_arrow(&mut self) -> Result<SpannedExpr, ParseError> {
+    fn parse_paren_or_arrow(&mut self) -> Result<Expr, ParseError> {
         let start = self.current_span().start;
         self.advance(); // eat `(`
 
@@ -570,7 +570,7 @@ impl Parser {
         if is_arrow {
             let body = self.parse_arrow_body()?;
             let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(0);
-            return Ok(Spanned::new(Expr::Arrow { params: names, body }, start..end));
+            return Ok(Spanned::new(RawExpr::Arrow { params: names, body }, start..end));
         }
 
         // Plain grouped expression

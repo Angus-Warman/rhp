@@ -1,12 +1,12 @@
 use crate::lexer::Spanned;
 
-pub type SpannedExpr = Spanned<Expr>;
-pub type SpannedStmt = Spanned<Stmt>;
+pub type Expr = Spanned<RawExpr>;
+pub type Stmt = Spanned<RawStmt>;
 
 // ---- Expressions ----
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum RawExpr {
     // Literals
     Number(String),
     StringLit(String),
@@ -17,48 +17,48 @@ pub enum Expr {
     Ident(String),
 
     // Unary: !x, -x, ++x, --x, x++, x--
-    Prefix { op: PrefixOp, expr: Box<SpannedExpr> },
-    Postfix { op: PostfixOp, expr: Box<SpannedExpr> },
+    Prefix { op: PrefixOp, expr: Box<Expr> },
+    Postfix { op: PostfixOp, expr: Box<Expr> },
 
     // Binary: a + b, a === b, etc.
-    Binary { op: BinOp, left: Box<SpannedExpr>, right: Box<SpannedExpr> },
+    Binary { op: BinOp, left: Box<Expr>, right: Box<Expr> },
 
     // Assignment: a = b, a += b, etc.
-    Assign { op: AssignOp, target: Box<SpannedExpr>, value: Box<SpannedExpr> },
+    Assign { op: AssignOp, target: Box<Expr>, value: Box<Expr> },
 
     // Ternary: cond ? then : else
     Ternary {
-        cond:      Box<SpannedExpr>,
-        then:      Box<SpannedExpr>,
-        otherwise: Box<SpannedExpr>,
+        cond:      Box<Expr>,
+        then:      Box<Expr>,
+        otherwise: Box<Expr>,
     },
 
     // Member access: a.b
-    Member { object: Box<SpannedExpr>, property: String },
+    Member { object: Box<Expr>, property: String },
 
     // Index access: a[b]
-    Index { object: Box<SpannedExpr>, index: Box<SpannedExpr> },
+    Index { object: Box<Expr>, index: Box<Expr> },
 
     // Call: f(a, b)
-    Call { callee: Box<SpannedExpr>, args: Vec<SpannedExpr> },
+    Call { callee: Box<Expr>, args: Vec<Expr> },
 
     // Array literal: [a, b, c]
-    Array(Vec<SpannedExpr>),
+    Array(Vec<Expr>),
 
     // Object literal: { a: 1, b: "x" }
-    Object(Vec<(String, SpannedExpr)>),
+    Object(Vec<(String, Expr)>),
 
     // Arrow function: (a, b) => expr  |  (a, b) => { stmts }
     Arrow { params: Vec<String>, body: ArrowBody },
 
     // <html> ... </html> block inside script
-    HtmlBlock(Vec<SpannedStmt>),
+    HtmlBlock(Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArrowBody {
-    Expr(Box<SpannedExpr>),
-    Block(Vec<SpannedStmt>),
+    Expr(Box<Expr>),
+    Block(Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,33 +81,33 @@ pub enum AssignOp { Assign, Add, Sub, Mul, Div }
 // ---- Statements ----
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub enum RawStmt {
     // let/const/var x = expr;
-    VarDecl { kind: VarKind, name: String, init: Option<SpannedExpr> },
+    VarDecl { kind: VarKind, name: String, init: Option<Expr> },
 
     // function f(a, b) { ... }
-    FunctionDecl { name: String, params: Vec<String>, body: Vec<SpannedStmt> },
+    FunctionDecl { name: String, params: Vec<String>, body: Vec<Stmt> },
 
     // if (cond) { ... } else { ... }
-    If { cond: SpannedExpr, then: Vec<SpannedStmt>, otherwise: Option<Vec<SpannedStmt>> },
+    If { cond: Expr, then: Vec<Stmt>, otherwise: Option<Vec<Stmt>> },
 
     // while (cond) { ... }
-    While { cond: SpannedExpr, body: Vec<SpannedStmt> },
+    While { cond: Expr, body: Vec<Stmt> },
 
     // for (init; cond; update) { ... }
     For {
-        init:   Option<Box<SpannedStmt>>,
-        cond:   Option<SpannedExpr>,
-        update: Option<SpannedExpr>,
-        body:   Vec<SpannedStmt>,
+        init:   Option<Box<Stmt>>,
+        cond:   Option<Expr>,
+        update: Option<Expr>,
+        body:   Vec<Stmt>,
     },
 
-    Return(Option<SpannedExpr>),
+    Return(Option<Expr>),
     Break,
     Continue,
 
     // Any expression used as a statement: f(), x++, etc.
-    Expr(SpannedExpr),
+    Expr(Expr),
 
     // Placeholder inserted when a statement fails to parse
     Error,
