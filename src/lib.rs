@@ -3,13 +3,12 @@ use std::{path::{Path, PathBuf}};
 use axum::{
     Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any, debug_handler,
 };
-use sqlx::{Any, Pool};
 use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use anyhow::Result;
 
-use crate::{db::connect, process::{Context, process_src}};
+use crate::{db::{DbConn, connect}, process::{Context, process_src}};
 
 mod lang;
 mod process;
@@ -28,10 +27,10 @@ pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()>
 #[derive(Clone)]
 struct AppState {
     folder: PathBuf,
-    conn: Pool<Any>,
+    conn: DbConn,
 }
 
-fn build_router(folder: PathBuf, conn: Pool<Any>) -> Router {
+fn build_router(folder: PathBuf, conn: DbConn) -> Router {
     let state = AppState { folder, conn };
 
     Router::new()
@@ -45,7 +44,7 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     let path = state.folder.join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().is_some_and(|ext| ext == "rhp") {
-        process_rhp(path, request).await.into_response()
+        process_rhp(path, request, state.conn).await.into_response()
     } else {
         ServeDir::new(state.folder)
             .oneshot(request)
@@ -54,11 +53,11 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn process_rhp(path: PathBuf, request: Request) -> Response {
+async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => {
             let context = Context::from_request(request).await.unwrap();
-            let html = process_src(src, context).await;
+            let html = process_src(src, context, conn).await;
             Html(html).into_response()
         },
         Err(_) => StatusCode::NOT_FOUND.into_response(),

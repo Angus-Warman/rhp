@@ -1,9 +1,18 @@
 use anyhow::Result;
 use sqlx::AnyPool;
 
-pub async fn ping() -> Result<String> {
-    Ok("pong".to_string())
+#[derive(Clone)]
+pub struct DbConn {
+    pool: AnyPool
 }
+
+impl DbConn {
+    pub async fn ping(&self) -> Result<String> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        Ok("pong".to_string())
+    }
+}
+
 
 fn normalise_dsn(dsn: &str) -> String {
     if dsn.starts_with("postgres") {
@@ -15,7 +24,8 @@ fn normalise_dsn(dsn: &str) -> String {
     }
 }
 
-pub async fn connect(dsn: &str) -> Result<AnyPool, sqlx::Error> {
+pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     sqlx::any::install_default_drivers();
-    AnyPool::connect(&normalise_dsn(dsn)).await
+    let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
+    Ok(DbConn { pool })
 }

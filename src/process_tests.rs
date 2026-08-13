@@ -1,7 +1,11 @@
 use super::*;
 
+async fn test_conn() -> DbConn {
+    crate::db::connect(":memory:").await.unwrap()
+}
+
 async fn test_process(script: &str) -> String {
-    let env = setup_env(&Context::default());
+    let env = setup_env(&Context::default(), test_conn().await);
     process_script_section(env, script).await
 }
 
@@ -18,7 +22,7 @@ fn request_with_body(method: &str, uri: &str, content_type: Option<&str>, body: 
 }
 
 async fn eval_with_context(context: &Context, script: &str) -> String {
-    let env = setup_env(context);
+    let env = setup_env(context, test_conn().await);
     process_script_section(env, script).await
 }
 
@@ -53,16 +57,16 @@ async fn test_console_log() {
 #[tokio::test]
 async fn test_method_filtered_sections() {
     let src = r#"<rhp method="PUT">return "put"</rhp><rhp method="POST">return "post"</rhp>"#;
-    assert_eq!(process_src(src.to_string(), ctx(Method::Post)).await, "post");
-    assert_eq!(process_src(src.to_string(), ctx(Method::Put)).await, "put");
-    assert_eq!(process_src(src.to_string(), ctx(Method::Get)).await, "");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Post), test_conn().await).await, "post");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Put), test_conn().await).await, "put");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Get), test_conn().await).await, "");
 }
 
 #[tokio::test]
 async fn test_unfiltered_section_runs_all_methods() {
     let src = r#"<rhp>return "always"</rhp>"#;
-    assert_eq!(process_src(src.to_string(), ctx(Method::Get)).await, "always");
-    assert_eq!(process_src(src.to_string(), ctx(Method::Post)).await, "always");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Get), test_conn().await).await, "always");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Post), test_conn().await).await, "always");
 }
 
 #[test]
@@ -224,7 +228,7 @@ async fn test_query_object() {
     let context = Context::from_request(
         request_with_body("GET", "/index.rhp?id=123&name=hello", None, ""),
     ).await.unwrap();
-    let env = setup_env(&context);
+    let env = setup_env(&context, test_conn().await);
     assert_eq!(process_script_section(env, "return QUERY.id").await, "123");
 }
 
@@ -276,6 +280,6 @@ async fn test_db_ping() {
     let context = Context::from_request(
         request_with_body("GET", "/x", None, ""),
     ).await.unwrap();
-    let env = setup_env(&context);
+    let env = setup_env(&context, test_conn().await);
     assert_eq!(process_script_section(env, "return DB.PING()").await, "pong");
 }

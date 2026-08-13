@@ -4,7 +4,7 @@ use axum::extract::{Query, Request};
 use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
 
-use crate::db;
+use crate::db::DbConn;
 use crate::lang::{
     eval::Evaluator,
     lexer,
@@ -141,8 +141,8 @@ fn json_to_value(json: serde_json::Value) -> Value {
     }
 }
 
-pub async fn process_src(src: String, context: Context) -> String {
-    let env = setup_env(&context);
+pub async fn process_src(src: String, context: Context, conn: DbConn) -> String {
+    let env = setup_env(&context, conn);
     let mut output = "".to_string();
 
     let sections = split_src(&src);
@@ -265,7 +265,7 @@ fn split_src(src: &str) -> Vec<Section> {
     sections
 }
 
-fn setup_env(context: &Context) -> Arc<Mutex<Env>> {
+fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
     let env = Env::new_root();
 
     {
@@ -309,13 +309,15 @@ fn setup_env(context: &Context) -> Arc<Mutex<Env>> {
         env_mut.define("console", console);
 
         // Define db.ping
+        let ping_conn = conn.clone();
         let ping = Value::Function(Function {
             params: vec!["value".to_string()],
-            body: FunctionBody::Native(Arc::new(|_args| {
+            body: FunctionBody::Native(Arc::new(move |_args| {
+                let conn = ping_conn.clone();
                 Box::pin(async move {
-                    let res = db::ping().await;
-                    let _text = res.unwrap(); // TODO: Once this is a call that can actually fail, replace this unwrap with { ok: false, error: msg }
-                    Ok(Value::String("pong".to_string()))
+                    let res = conn.ping().await;
+                    let text = res.unwrap(); // TODO: Once this is a call that can actually fail, replace this unwrap with { ok: false, error: msg }
+                    Ok(Value::String(text))
                 })
             })),
             captured: Env::new_root(),
