@@ -68,15 +68,17 @@ fn parse_body(method: Method, headers: &HeaderMap, bytes: &[u8]) -> Result<Value
     }
 
     if content_type.starts_with("application/x-www-form-urlencoded") {
-        let form: HashMap<String, Vec<String>> =
+        let pairs: Vec<(String, String)> =
             serde_urlencoded::from_bytes(bytes).map_err(ContextError::Form)?;
         let mut map = HashMap::new();
-        for (key, values) in form {
-            if values.len() == 1 {
-                map.insert(key, Value::String(values[0].clone()));
-            } else {
-                let arr = values.into_iter().map(Value::String).collect::<Vec<_>>();
-                map.insert(key, Value::Array(Rc::new(RefCell::new(arr))));
+        for (key, value) in pairs {
+            map.entry(key.clone()).or_insert(Value::String(value.clone()));
+            let arr_key = format!("{key}s");
+            match map.get_mut(&arr_key) {
+                Some(Value::Array(arr)) => arr.borrow_mut().push(Value::String(value)),
+                _ => {
+                    map.insert(arr_key, Value::Array(Rc::new(RefCell::new(vec![Value::String(value)]))));
+                }
             }
         }
         return Ok(Value::Object(Rc::new(RefCell::new(map))));

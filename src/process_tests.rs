@@ -128,87 +128,91 @@ async fn test_context_from_request_without_query() {
     assert_eq!(context.body.display(), "{}");
 }
 
-// #[tokio::test]
-// async fn test_body_text() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("text/plain"), "hello world"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY.text"), "hello world");
-// }
+#[tokio::test]
+async fn test_body_text() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("text/plain"), "hello world"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY.text"), "hello world");
+}
 
-// #[tokio::test]
-// async fn test_body_json_object() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/json"), r#"{"name":"rhp","count":2}"#),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY.name"), "rhp");
-//     assert_eq!(eval_with_context(&context, "return BODY.count"), "2");
-// }
+#[tokio::test]
+async fn test_body_json_object() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/json"), r#"{"name":"rhp","count":2}"#),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY.name"), "rhp");
+    assert_eq!(eval_with_context(&context, "return BODY.count"), "2");
+}
 
-// #[tokio::test]
-// async fn test_body_json_nested() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/json"), r#"{"user":{"age":3}}"#),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY.user.age"), "3");
-// }
+#[tokio::test]
+async fn test_body_json_nested() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/json"), r#"{"user":{"age":3}}"#),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY.user.age"), "3");
+}
 
-// #[tokio::test]
-// async fn test_body_json_array() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/json"), "[1, 2, 3]"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY"), "[1, 2, 3]");
-// }
+#[tokio::test]
+async fn test_body_json_array() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/json"), "[1, 2, 3]"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY"), "[1, 2, 3]");
+}
 
-// #[tokio::test]
-// async fn test_body_json_primitive() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/json"), "5"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY"), "5");
-// }
+#[tokio::test]
+async fn test_body_json_primitive() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/json"), "5"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY"), "5");
+}
 
-// #[tokio::test]
-// async fn test_body_form() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "a=1&b=hello"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY.a"), "1");
-//     assert_eq!(eval_with_context(&context, "return BODY.b"), "hello");
-// }
+#[tokio::test]
+async fn test_body_form() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "a=1&b=hello"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY.a"), "1");
+    assert_eq!(eval_with_context(&context, "return BODY.as"), "[1]");
+    assert_eq!(eval_with_context(&context, "return BODY.b"), "hello");
+    assert_eq!(eval_with_context(&context, "return BODY.bs"), "[hello]");
+    assert_eq!(eval_with_context(&context, "return BODY.c"), "null");
+}
 
-// #[tokio::test]
-// async fn test_body_form_duplicate_values() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "color=red&color=blue"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY.color"), "[red, blue]");
-// }
+#[tokio::test]
+async fn test_body_form_duplicate_values() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "color=red&color=blue"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY.color"), "red"); // Gets the first
+    assert_eq!(eval_with_context(&context, "return BODY.colors"), "[red, blue]");
+}
 
-// #[tokio::test]
-// async fn test_body_empty_for_get() {
-//     let context = Context::from_request(
-//         request_with_body("GET", "/x", Some("text/plain"), "ignored"),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY"), "{}");
-// }
+#[tokio::test]
+async fn test_body_empty_for_get() {
+    let context = Context::from_request(
+        request_with_body("GET", "/x", Some("text/plain"), "ignored"),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY"), "{}");
+}
 
-// #[tokio::test]
-// async fn test_body_empty_body() {
-//     let context = Context::from_request(
-//         request_with_body("POST", "/x", Some("text/plain"), ""),
-//     ).await.unwrap();
-//     assert_eq!(eval_with_context(&context, "return BODY"), "{}");
-// }
+#[tokio::test]
+async fn test_body_empty_body() {
+    let context = Context::from_request(
+        request_with_body("POST", "/x", Some("text/plain"), ""),
+    ).await.unwrap();
+    assert_eq!(eval_with_context(&context, "return BODY"), "{}");
+}
 
-// #[tokio::test]
-// async fn test_body_invalid_json_errors() {
-//     let result = Context::from_request(
-//         request_with_body("POST", "/x", Some("application/json"), "{not json}"),
-//     ).await;
-//     assert!(matches!(result, Err(ContextError::Json(_))));
-// }
+#[tokio::test]
+async fn test_body_invalid_json_errors() {
+    let result = Context::from_request(
+        request_with_body("POST", "/x", Some("application/json"), "{not json}"),
+    ).await;
+    assert!(matches!(result, Err(ContextError::Json(_))));
+}
 
 #[test]
 fn test_query_global_empty() {
