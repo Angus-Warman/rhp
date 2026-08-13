@@ -103,6 +103,7 @@ pub enum RawStmt {
     },
 
     Return(Option<Expr>),
+    Try(Expr),
     Break,
     Continue,
 

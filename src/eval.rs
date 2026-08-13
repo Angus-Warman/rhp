@@ -172,6 +172,16 @@ impl Evaluator {
                 self.eval_expr(expr, env)?;
                 Ok(())
             }
+            RawStmt::Try(expr) => {
+                let value = self.eval_expr(expr, env)?;
+
+                if value.is_truthy() {
+                    Ok(())
+                }
+                else {
+                    Err(Signal::Return(value))
+                }
+            },
         }
     }
 

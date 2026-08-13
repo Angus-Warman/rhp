@@ -113,8 +113,24 @@ impl Value {
             Value::Number(n)   => *n != 0.0 && !n.is_nan(),
             Value::String(s)   => !s.is_empty(),
             Value::Array(_)    => true,
-            Value::Object(_)   => true,
             Value::Function(_) => true,
+            Value::Object(o)   => {
+                let obj = o.borrow();
+
+                if obj.is_empty() {
+                    return false
+                }
+
+                if obj.get("ok").is_some_and(|v| v.is_truthy()) {
+                    return true
+                }
+
+                if obj.get("error").is_some_and(|e| e.is_truthy()){
+                    return false
+                }
+
+                return true
+            },
         }
     }
 

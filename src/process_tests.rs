@@ -227,3 +227,46 @@ async fn test_query_object() {
     let env = setup_env(&context);
     assert_eq!(process_script_section(env, "return QUERY.id"), "123");
 }
+
+#[test]
+fn test_object_falsiness() {
+    assert_eq!(test_process(r"
+        let a = {}
+        if (a) { return 1 }
+        return 2
+    "), "2");
+}
+
+#[test]
+fn test_object_truthiness() {
+    assert_eq!(test_process(r"
+        let a = { ok: true }
+        if (a) { return 1 }
+        return 2
+    "), "1");
+}
+
+#[test]
+fn test_object_error_falsiness() {
+    assert_eq!(test_process(r"
+        let a = { ok: false, error: 'oh no' }
+        if (a) { return 1 }
+        return 2
+    "), "2");
+}
+
+#[test]
+fn test_try_syntax() {
+    assert_eq!(test_process(r"
+        let a = { b: 1 }
+        try a
+        return 'task complete'
+    "), "task complete");
+
+    assert_eq!(test_process(r"
+        let a = { b: 1 }
+        a.error = 'oh no'
+        try a
+        return 'task complete'
+    "), "{ b: 1, error: oh no }"); // TODO Should this have quotes?
+}

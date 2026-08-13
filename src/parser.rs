@@ -119,6 +119,7 @@ impl Parser {
             Some(Token::While)    => self.parse_while(),
             Some(Token::For)      => self.parse_for(),
             Some(Token::Return)   => self.parse_return(),
+            Some(Token::Try)   => self.parse_try(),
             Some(Token::Break)    => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Break) }
             Some(Token::Continue) => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Continue) }
             Some(Token::HtmlOpen) => self.parse_html_block_stmt(),
@@ -232,6 +233,13 @@ impl Parser {
         };
         self.eat(&Token::Semicolon);
         Ok(RawStmt::Return(value))
+    }
+
+    fn parse_try(&mut self) -> Result<RawStmt, ParseError> {
+        self.advance(); // eat 'try'
+        let value = self.parse_expr()?;
+        self.eat(&Token::Semicolon);
+        Ok(RawStmt::Try(value))
     }
 
     fn parse_html_block_stmt(&mut self) -> Result<RawStmt, ParseError> {
