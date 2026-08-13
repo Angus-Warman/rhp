@@ -270,3 +270,12 @@ fn test_try_syntax() {
         return 'task complete'
     "), "{ b: 1, error: oh no }"); // TODO Should this have quotes?
 }
+
+#[tokio::test]
+async fn test_db_ping() {
+    let context = Context::from_request(
+        request_with_body("GET", "/x", None, ""),
+    ).await.unwrap();
+    let env = setup_env(&context);
+    assert_eq!(process_script_section(env, "return DB.PING()"), "pong");
+}

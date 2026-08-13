@@ -257,6 +257,7 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
 
         env_mut.define("BODY", context.body.clone());
 
+        // Define console.log
         let log = Value::Function(Function {
             params: vec!["value".to_string()],
             body: FunctionBody::Native(Rc::new(|args| {
@@ -278,6 +279,23 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
         })));
 
         env_mut.define("console", console);
+
+        // Define db.ping
+        let ping = Value::Function(Function {
+            params: vec!["value".to_string()],
+            body: FunctionBody::Native(Rc::new(|args| {
+                Ok(Value::String("pong".to_string()))
+            })),
+            captured: Env::new_root(),
+        });
+
+        let db = Value::Object(Rc::new(RefCell::new({
+            let mut map = HashMap::new();
+            map.insert("PING".to_string(), ping);
+            map 
+        })));
+
+        env_mut.define("DB", db);
     }
 
     env

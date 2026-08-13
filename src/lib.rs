@@ -11,6 +11,7 @@ use crate::process::{process_src, Context};
 
 mod lang;
 mod process;
+mod db;
 
 pub async fn run_server(port: u16, folder: PathBuf, _db_conn: &str) {
     let addr = format!("0.0.0.0:{port}");

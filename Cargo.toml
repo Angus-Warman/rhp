@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+async-recursion = "1.1.1"
 axum = { version = "0.8.9", features = ["macros"] }
 axum-test = "21.0.0"
 clap = { version = "4.6.6", features = ["derive", "env"] }
