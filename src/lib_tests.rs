@@ -47,48 +47,48 @@ async fn test_query_global() {
     response.assert_text("123");
 }
 
-// #[tokio::test]
-// async fn test_body_global_text() {
-//     let server = test_server().await;
-//     let response = server.post("/body.rhp").text("hello world").await;
-//     response.assert_status_ok();
-//     response.assert_text("{ text: hello world }");
-// }
+#[tokio::test]
+async fn test_body_global_text() {
+    let server = test_server().await;
+    let response = server.post("/body.rhp").text("hello world").await;
+    response.assert_status_ok();
+    response.assert_text("{ text: hello world }");
+}
 
-// #[tokio::test]
-// async fn test_body_global_json() {
-//     let server = test_server().await;
-//     let response = server.post("/body.rhp").json(&serde_json::json!({"name": "rhp"})).await;
-//     response.assert_status_ok();
-//     response.assert_text("{ name: rhp }");
-// }
+#[tokio::test]
+async fn test_body_global_json() {
+    let server = test_server().await;
+    let response = server.post("/body.rhp").json(&serde_json::json!({"name": "rhp"})).await;
+    response.assert_status_ok();
+    response.assert_text("{ name: rhp }");
+}
 
-// #[tokio::test]
-// async fn test_body_global_form() {
-//     let server = test_server().await;
-//     let response = server
-//         .post("/body.rhp")
-//         .form(&[("color", "red"), ("color", "blue")])
-//         .await;
-//     response.assert_status_ok();
-//     response.assert_text("{ color: [red, blue] }");
-// }
+#[tokio::test]
+async fn test_body_global_form() {
+    let server = test_server().await;
+    let response = server
+        .post("/body.rhp")
+        .form(&[("color", "red"), ("color", "blue")])
+        .await;
+    response.assert_status_ok();
+    response.assert_text("{ color: [red], colors: [red, blue] }");
+}
 
-// #[tokio::test]
-// async fn test_body_global_get_is_empty() {
-//     let server = test_server().await;
-//     let response = server.get("/body.rhp").await;
-//     response.assert_status_ok();
-//     response.assert_text("{}");
-// }
+#[tokio::test]
+async fn test_body_global_get_is_empty() {
+    let server = test_server().await;
+    let response = server.get("/body.rhp").await;
+    response.assert_status_ok();
+    response.assert_text("{}");
+}
 
-// #[tokio::test]
-// async fn test_body_global_invalid_json_is_400() {
-//     let server = test_server().await;
-//     let response = server
-//         .post("/body.rhp")
-//         .bytes("{not json}".into())
-//         .content_type("application/json")
-//         .await;
-//     response.assert_status_bad_request();
-// }
+#[tokio::test]
+async fn test_body_global_invalid_json_is_400() {
+    let server = test_server().await;
+    let response = server
+        .post("/body.rhp")
+        .bytes("{not json}".into())
+        .content_type("application/json")
+        .await;
+    response.assert_status_bad_request();
+}
