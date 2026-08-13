@@ -9,12 +9,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::process::{process_src, Context};
 
-mod ast;
-mod eval;
-mod lexer;
-mod parser;
+mod lang;
 mod process;
-mod value;
 
 pub async fn run_server(port: u16, folder: PathBuf, _db_conn: &str) {
     let addr = format!("0.0.0.0:{port}");

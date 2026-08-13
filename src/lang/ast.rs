@@ -1,4 +1,4 @@
-use crate::lexer::Spanned;
+use crate::lang::lexer::Spanned;
 
 pub type Expr = Spanned<RawExpr>;
 pub type Stmt = Spanned<RawStmt>;

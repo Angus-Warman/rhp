@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::*;
-use crate::eval::EvalError;
+use crate::lang::ast::*;
+use crate::lang::eval::EvalError;
 
 #[derive(Debug, Clone)]
 pub struct Env {
@@ -129,7 +129,7 @@ impl Value {
                     return false
                 }
 
-                return true
+                true
             },
         }
     }
