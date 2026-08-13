@@ -1,6 +1,7 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use crate::lang::ast::*;
 use crate::lang::eval::EvalError;
@@ -8,23 +9,23 @@ use crate::lang::eval::EvalError;
 #[derive(Debug, Clone)]
 pub struct Env {
     vars:   HashMap<String, Value>,
-    parent: Option<Rc<RefCell<Env>>>,
+    parent: Option<Arc<Mutex<Env>>>,
 }
 
 impl Env {
-    pub fn new_root() -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self { vars: HashMap::new(), parent: None }))
+    pub fn new_root() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { vars: HashMap::new(), parent: None }))
     }
 
-    pub fn new_child(parent: Rc<RefCell<Env>>) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Self { vars: HashMap::new(), parent: Some(parent) }))
+    pub fn new_child(parent: Arc<Mutex<Env>>) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { vars: HashMap::new(), parent: Some(parent) }))
     }
 
     pub fn get(&self, name: &str) -> Option<Value> {
         if let Some(v) = self.vars.get(name) {
             return Some(v.clone());
         }
-        self.parent.as_ref()?.borrow().get(name)
+        self.parent.as_ref()?.lock().unwrap().get(name)
     }
 
     pub fn set(&mut self, name: &str, value: Value) {
@@ -35,8 +36,8 @@ impl Env {
             return;
         }
         if let Some(parent) = &self.parent
-            && parent.borrow().has(name) {
-            parent.borrow_mut().set(name, value);
+            && parent.lock().unwrap().has(name) {
+            parent.lock().unwrap().set(name, value);
             return;
         }
         self.vars.insert(name.to_string(), value);
@@ -49,7 +50,7 @@ impl Env {
 
     fn has(&self, name: &str) -> bool {
         if self.vars.contains_key(name) { return true; }
-        self.parent.as_ref().is_some_and(|p| p.borrow().has(name))
+        self.parent.as_ref().is_some_and(|p| p.lock().unwrap().has(name))
     }
 }
 
@@ -61,8 +62,8 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     String(String),
-    Array(Rc<RefCell<Vec<Value>>>),
-    Object(Rc<RefCell<HashMap<String, Value>>>),
+    Array(Arc<Mutex<Vec<Value>>>),
+    Object(Arc<Mutex<HashMap<String, Value>>>),
     Function(Function),
 }
 
@@ -70,15 +71,17 @@ pub enum Value {
 pub struct Function {
     pub params:   Vec<String>,
     pub body:     FunctionBody,
-    pub captured: Rc<RefCell<Env>>,  // closure environment
+    pub captured: Arc<Mutex<Env>>,  // closure environment
 }
 
 #[derive(Clone)]
 pub enum FunctionBody {
     Block(Vec<Stmt>),
     Expr(Box<Expr>),
-    Native(Rc<dyn Fn(Vec<Value>) -> Result<Value, EvalError>>),
+    Native(NativeFn),
 }
+
+type NativeFn = Arc<dyn Fn(Vec<Value>) -> Pin<Box<dyn Future<Output = Result<Value, EvalError>> + Send>> + Send + Sync>;
 
 impl std::fmt::Debug for FunctionBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -97,8 +100,8 @@ impl PartialEq for Value {
             (Value::Bool(a),     Value::Bool(b))     => a == b,
             (Value::Number(a),   Value::Number(b))   => a == b,
             (Value::String(a),   Value::String(b))   => a == b,
-            (Value::Array(a),    Value::Array(b))    => Rc::ptr_eq(a, b),
-            (Value::Object(a),   Value::Object(b))   => Rc::ptr_eq(a, b),
+            (Value::Array(a),    Value::Array(b))    => Arc::ptr_eq(a, b),
+            (Value::Object(a),   Value::Object(b))   => Arc::ptr_eq(a, b),
             (Value::Function(_), Value::Function(_)) => false, // functions aren't equal
             _ => false,
         }
@@ -115,7 +118,7 @@ impl Value {
             Value::Array(_)    => true,
             Value::Function(_) => true,
             Value::Object(o)   => {
-                let obj = o.borrow();
+                let obj = o.lock().unwrap();
 
                 if obj.is_empty() {
                     return false
@@ -159,11 +162,11 @@ impl Value {
             }
             Value::String(s)   => s.clone(),
             Value::Array(a)    => {
-                let items: Vec<String> = a.borrow().iter().map(|v| v.display()).collect();
+                let items: Vec<String> = a.lock().unwrap().iter().map(|v| v.display()).collect();
                 format!("[{}]", items.join(", "))
             }
             Value::Object(o)   => {
-                let mut pairs: Vec<(String, String)> = o.borrow().iter()
+                let mut pairs: Vec<(String, String)> = o.lock().unwrap().iter()
                     .map(|(k, v)| (k.clone(), v.display()))
                     .collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));

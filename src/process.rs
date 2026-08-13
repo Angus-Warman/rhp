@@ -1,18 +1,26 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use axum::extract::{Query, Request};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderMap;
+use axum::http::header::CONTENT_TYPE;
 
-use crate::lang::{eval::Evaluator, lexer, parser::Parser, value::{
-    self, Env, Function, FunctionBody::{self}, Value,
-}};
+use crate::db;
+use crate::lang::{
+    eval::Evaluator,
+    lexer,
+    parser::Parser,
+    value::{
+        self, Env, Function,
+        FunctionBody::{self},
+        Value,
+    },
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Context {
     pub method: Method,
-    pub query:  HashMap<String, String>,
-    pub body:   Value,
+    pub query: HashMap<String, String>,
+    pub body: Value,
 }
 
 #[derive(Debug)]
@@ -46,7 +54,11 @@ impl Context {
             .map_err(ContextError::Body)?;
         let body_value = parse_body(method, &parts.headers, &bytes)?;
 
-        Ok(Self { method, query, body: body_value })
+        Ok(Self {
+            method,
+            query,
+            body: body_value,
+        })
     }
 }
 
@@ -54,14 +66,14 @@ impl Default for Context {
     fn default() -> Self {
         Self {
             method: Method::All,
-            query:  HashMap::new(),
-            body:   empty_object(),
+            query: HashMap::new(),
+            body: empty_object(),
         }
     }
 }
 
 fn empty_object() -> Value {
-    Value::Object(Rc::new(RefCell::new(HashMap::new())))
+    Value::Object(Arc::new(Mutex::new(HashMap::new())))
 }
 
 fn parse_body(method: Method, headers: &HeaderMap, bytes: &[u8]) -> Result<Value, ContextError> {
@@ -84,57 +96,65 @@ fn parse_body(method: Method, headers: &HeaderMap, bytes: &[u8]) -> Result<Value
             serde_urlencoded::from_bytes(bytes).map_err(ContextError::Form)?;
         let mut map = HashMap::new();
         for (key, value) in pairs {
-            map.entry(key.clone()).or_insert(Value::String(value.clone()));
+            map.entry(key.clone())
+                .or_insert(Value::String(value.clone()));
             let arr_key = format!("{key}s");
             match map.get_mut(&arr_key) {
-                Some(Value::Array(arr)) => arr.borrow_mut().push(Value::String(value)),
+                Some(Value::Array(arr)) => arr.lock().unwrap().push(Value::String(value)),
                 _ => {
-                    map.insert(arr_key, Value::Array(Rc::new(RefCell::new(vec![Value::String(value)]))));
+                    map.insert(
+                        arr_key,
+                        Value::Array(Arc::new(Mutex::new(vec![Value::String(value)]))),
+                    );
                 }
             }
         }
-        return Ok(Value::Object(Rc::new(RefCell::new(map))));
+        return Ok(Value::Object(Arc::new(Mutex::new(map))));
     }
 
     // Default: treat as text
     let mut map = HashMap::new();
-    map.insert("text".to_string(), Value::String(String::from_utf8_lossy(bytes).to_string()));
-    Ok(Value::Object(Rc::new(RefCell::new(map))))
+    map.insert(
+        "text".to_string(),
+        Value::String(String::from_utf8_lossy(bytes).to_string()),
+    );
+    Ok(Value::Object(Arc::new(Mutex::new(map))))
 }
 
 fn json_to_value(json: serde_json::Value) -> Value {
     match json {
-        serde_json::Value::Null    => Value::Null,
+        serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(items) => {
             let vals = items.into_iter().map(json_to_value).collect::<Vec<_>>();
-            Value::Array(Rc::new(RefCell::new(vals)))
+            Value::Array(Arc::new(Mutex::new(vals)))
         }
         serde_json::Value::Object(map) => {
-            let vals = map.into_iter()
+            let vals = map
+                .into_iter()
                 .map(|(k, v)| (k, json_to_value(v)))
                 .collect::<HashMap<_, _>>();
-            Value::Object(Rc::new(RefCell::new(vals)))
+            Value::Object(Arc::new(Mutex::new(vals)))
         }
     }
 }
 
-pub fn process_src(src: &str, context: &Context) -> String {
-    let env = setup_env(context);
+pub async fn process_src(src: String, context: Context) -> String {
+    let env = setup_env(&context);
     let mut output = "".to_string();
 
-    let sections = split_src(src);
+    let sections = split_src(&src);
 
     for section in sections {
         match section {
             Section::Html(html) => output += &html,
             Section::Code { code, method } if method.matches(&context.method) => {
-                let result = process_script_section(env.clone(), &code);
+                let result = process_script_section(env.clone(), &code).await;
                 output += &result;
-            },
-            Section::Code { .. } => {},
+            }
+            Section::Code { .. } => {}
         }
     }
 
@@ -156,14 +176,14 @@ pub enum Method {
 impl Method {
     pub fn from_str(s: &str) -> Method {
         match s.to_ascii_uppercase().as_str() {
-            "GET"     => Method::Get,
-            "HEAD"    => Method::Head,
-            "POST"    => Method::Post,
-            "PUT"     => Method::Put,
-            "DELETE"  => Method::Delete,
-            "PATCH"   => Method::Patch,
+            "GET" => Method::Get,
+            "HEAD" => Method::Head,
+            "POST" => Method::Post,
+            "PUT" => Method::Put,
+            "DELETE" => Method::Delete,
+            "PATCH" => Method::Patch,
             "OPTIONS" => Method::Options,
-            _         => Method::All,
+            _ => Method::All,
         }
     }
 
@@ -224,7 +244,10 @@ fn split_src(src: &str) -> Vec<Section> {
                     None => {
                         // Unclosed tag — treat the rest as a code block anyway,
                         // or you could return an Err here
-                        sections.push(Section::Code { code: body.to_string(), method });
+                        sections.push(Section::Code {
+                            code: body.to_string(),
+                            method,
+                        });
                         break;
                     }
                     Some(code_end) => {
@@ -242,17 +265,20 @@ fn split_src(src: &str) -> Vec<Section> {
     sections
 }
 
-fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
+fn setup_env(context: &Context) -> Arc<Mutex<Env>> {
     let env = Env::new_root();
 
-    { // Scopes env_mut
-        let mut env_mut = env.borrow_mut();
+    {
+        // Scopes env_mut
+        let mut env_mut = env.lock().unwrap();
         env_mut.define("VERSION", value::Value::String("0.0.1".to_string()));
 
-        let query_map: HashMap<String, Value> = context.query.iter()
+        let query_map: HashMap<String, Value> = context
+            .query
+            .iter()
             .map(|(k, v)| (k.clone(), Value::String(v.clone())))
             .collect();
-        let query = Value::Object(Rc::new(RefCell::new(query_map)));
+        let query = Value::Object(Arc::new(Mutex::new(query_map)));
         env_mut.define("QUERY", query);
 
         env_mut.define("BODY", context.body.clone());
@@ -260,19 +286,21 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
         // Define console.log
         let log = Value::Function(Function {
             params: vec!["value".to_string()],
-            body: FunctionBody::Native(Rc::new(|args| {
-                let output = args
-                    .iter()
-                    .map(|v| v.display())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                println!("{}", output);
-                Ok(Value::Null)
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    let output = args
+                        .iter()
+                        .map(|v| v.display())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!("{}", output);
+                    Ok(Value::Null)
+                })
             })),
             captured: Env::new_root(),
         });
 
-        let console = Value::Object(Rc::new(RefCell::new({
+        let console = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
             map.insert("log".to_string(), log);
             map
@@ -283,16 +311,20 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
         // Define db.ping
         let ping = Value::Function(Function {
             params: vec!["value".to_string()],
-            body: FunctionBody::Native(Rc::new(|args| {
-                Ok(Value::String("pong".to_string()))
+            body: FunctionBody::Native(Arc::new(|_args| {
+                Box::pin(async move {
+                    let res = db::ping().await;
+                    let _text = res.unwrap(); // TODO: Once this is a call that can actually fail, replace this unwrap with { ok: false, error: msg }
+                    Ok(Value::String("pong".to_string()))
+                })
             })),
             captured: Env::new_root(),
         });
 
-        let db = Value::Object(Rc::new(RefCell::new({
+        let db = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
             map.insert("PING".to_string(), ping);
-            map 
+            map
         })));
 
         env_mut.define("DB", db);
@@ -301,13 +333,12 @@ fn setup_env(context: &Context) -> Rc<RefCell<Env>> {
     env
 }
 
-fn process_script_section(env: Rc<RefCell<Env>>, script: &str) -> String {
+async fn process_script_section(env: Arc<Mutex<Env>>, script: &str) -> String {
     let tokens = lexer::lex_code(script).unwrap();
     let (stmts, _) = Parser::parse(tokens);
     let mut evalulator = Evaluator::new();
-    
 
-    evalulator.eval_stmts(&stmts, env).unwrap();
+    evalulator.eval_stmts(&stmts, env).await.unwrap();
     evalulator.output
 }
 

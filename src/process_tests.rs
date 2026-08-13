@@ -1,8 +1,8 @@
 use super::*;
 
-fn test_process(script: &str) -> String {
+async fn test_process(script: &str) -> String {
     let env = setup_env(&Context::default());
-    process_script_section(env, script)
+    process_script_section(env, script).await
 }
 
 fn ctx(method: Method) -> Context {
@@ -17,52 +17,52 @@ fn request_with_body(method: &str, uri: &str, content_type: Option<&str>, body: 
     builder.body(axum::body::Body::from(body.to_string())).unwrap()
 }
 
-fn eval_with_context(context: &Context, script: &str) -> String {
+async fn eval_with_context(context: &Context, script: &str) -> String {
     let env = setup_env(context);
-    process_script_section(env, script)
+    process_script_section(env, script).await
 }
 
-#[test]
-fn test_basic_eval() {
-    assert_eq!(test_process("return 1 + 2"), "3");
+#[tokio::test]
+async fn test_basic_eval() {
+    assert_eq!(test_process("return 1 + 2").await, "3");
 }
 
-#[test]
-fn test_pass_function() {
+#[tokio::test]
+async fn test_pass_function() {
     assert_eq!(test_process(r"
         let inc = (a) => a + 1
         let apply_twice = (f, n) => f(f(n))
         return apply_twice(inc, 2) 
-    "), "4");
+    ").await, "4");
 }
 
-#[test]
-fn test_global_constants() {
+#[tokio::test]
+async fn test_global_constants() {
     assert_eq!(test_process(r"
         return VERSION 
-    "), "0.0.1");
+    ").await, "0.0.1");
 }
 
-#[test]
-fn test_console_log() {
+#[tokio::test]
+async fn test_console_log() {
     assert_eq!(test_process(r"
         console.log('hello world') 
-    "), "");
+    ").await, "");
 }
 
-#[test]
-fn test_method_filtered_sections() {
+#[tokio::test]
+async fn test_method_filtered_sections() {
     let src = r#"<rhp method="PUT">return "put"</rhp><rhp method="POST">return "post"</rhp>"#;
-    assert_eq!(process_src(src, &ctx(Method::Post)), "post");
-    assert_eq!(process_src(src, &ctx(Method::Put)), "put");
-    assert_eq!(process_src(src, &ctx(Method::Get)), "");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Post)).await, "post");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Put)).await, "put");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Get)).await, "");
 }
 
-#[test]
-fn test_unfiltered_section_runs_all_methods() {
+#[tokio::test]
+async fn test_unfiltered_section_runs_all_methods() {
     let src = r#"<rhp>return "always"</rhp>"#;
-    assert_eq!(process_src(src, &ctx(Method::Get)), "always");
-    assert_eq!(process_src(src, &ctx(Method::Post)), "always");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Get)).await, "always");
+    assert_eq!(process_src(src.to_string(), ctx(Method::Post)).await, "always");
 }
 
 #[test]
@@ -78,34 +78,34 @@ fn test_split_src_parses_method_attr() {
     );
 }
 
-#[test]
-fn test_object_prop() {
+#[tokio::test]
+async fn test_object_prop() {
     assert_eq!(test_process(r"
         let a = {}
         a.b = 1
         return a
-    "), "{ b: 1 }");
+    ").await, "{ b: 1 }");
 }
 
-#[test]
-fn test_null_value() {
-    assert_eq!(test_process("return null"), "null");
+#[tokio::test]
+async fn test_null_value() {
+    assert_eq!(test_process("return null").await, "null");
 }
 
-#[test]
-fn test_bool_values() {
-    assert_eq!(test_process("return true"), "true");
-    assert_eq!(test_process("return false"), "false");
+#[tokio::test]
+async fn test_bool_values() {
+    assert_eq!(test_process("return true").await, "true");
+    assert_eq!(test_process("return false").await, "false");
 }
 
-#[test]
-fn test_array_value() {
-    assert_eq!(test_process("return [1, 2, 3]"), "[1, 2, 3]");
+#[tokio::test]
+async fn test_array_value() {
+    assert_eq!(test_process("return [1, 2, 3]").await, "[1, 2, 3]");
 }
 
-#[test]
-fn test_function_value_display() {
-    assert_eq!(test_process("return (a) => a"), "[function]");
+#[tokio::test]
+async fn test_function_value_display() {
+    assert_eq!(test_process("return (a) => a").await, "[function]");
 }
 
 #[tokio::test]
@@ -133,7 +133,7 @@ async fn test_body_text() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("text/plain"), "hello world"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY.text"), "hello world");
+    assert_eq!(eval_with_context(&context, "return BODY.text").await, "hello world");
 }
 
 #[tokio::test]
@@ -141,8 +141,8 @@ async fn test_body_json_object() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/json"), r#"{"name":"rhp","count":2}"#),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY.name"), "rhp");
-    assert_eq!(eval_with_context(&context, "return BODY.count"), "2");
+    assert_eq!(eval_with_context(&context, "return BODY.name").await, "rhp");
+    assert_eq!(eval_with_context(&context, "return BODY.count").await, "2");
 }
 
 #[tokio::test]
@@ -150,7 +150,7 @@ async fn test_body_json_nested() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/json"), r#"{"user":{"age":3}}"#),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY.user.age"), "3");
+    assert_eq!(eval_with_context(&context, "return BODY.user.age").await, "3");
 }
 
 #[tokio::test]
@@ -158,7 +158,7 @@ async fn test_body_json_array() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/json"), "[1, 2, 3]"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY"), "[1, 2, 3]");
+    assert_eq!(eval_with_context(&context, "return BODY").await, "[1, 2, 3]");
 }
 
 #[tokio::test]
@@ -166,7 +166,7 @@ async fn test_body_json_primitive() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/json"), "5"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY"), "5");
+    assert_eq!(eval_with_context(&context, "return BODY").await, "5");
 }
 
 #[tokio::test]
@@ -174,11 +174,11 @@ async fn test_body_form() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "a=1&b=hello"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY.a"), "1");
-    assert_eq!(eval_with_context(&context, "return BODY.as"), "[1]");
-    assert_eq!(eval_with_context(&context, "return BODY.b"), "hello");
-    assert_eq!(eval_with_context(&context, "return BODY.bs"), "[hello]");
-    assert_eq!(eval_with_context(&context, "return BODY.c"), "null");
+    assert_eq!(eval_with_context(&context, "return BODY.a").await, "1");
+    assert_eq!(eval_with_context(&context, "return BODY.as").await, "[1]");
+    assert_eq!(eval_with_context(&context, "return BODY.b").await, "hello");
+    assert_eq!(eval_with_context(&context, "return BODY.bs").await, "[hello]");
+    assert_eq!(eval_with_context(&context, "return BODY.c").await, "null");
 }
 
 #[tokio::test]
@@ -186,8 +186,8 @@ async fn test_body_form_duplicate_values() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("application/x-www-form-urlencoded"), "color=red&color=blue"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY.color"), "red"); // Gets the first
-    assert_eq!(eval_with_context(&context, "return BODY.colors"), "[red, blue]");
+    assert_eq!(eval_with_context(&context, "return BODY.color").await, "red"); // Gets the first
+    assert_eq!(eval_with_context(&context, "return BODY.colors").await, "[red, blue]");
 }
 
 #[tokio::test]
@@ -195,7 +195,7 @@ async fn test_body_empty_for_get() {
     let context = Context::from_request(
         request_with_body("GET", "/x", Some("text/plain"), "ignored"),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY"), "{}");
+    assert_eq!(eval_with_context(&context, "return BODY").await, "{}");
 }
 
 #[tokio::test]
@@ -203,7 +203,7 @@ async fn test_body_empty_body() {
     let context = Context::from_request(
         request_with_body("POST", "/x", Some("text/plain"), ""),
     ).await.unwrap();
-    assert_eq!(eval_with_context(&context, "return BODY"), "{}");
+    assert_eq!(eval_with_context(&context, "return BODY").await, "{}");
 }
 
 #[tokio::test]
@@ -214,9 +214,9 @@ async fn test_body_invalid_json_errors() {
     assert!(matches!(result, Err(ContextError::Json(_))));
 }
 
-#[test]
-fn test_query_global_empty() {
-    assert_eq!(test_process("return QUERY"), "{}");
+#[tokio::test]
+async fn test_query_global_empty() {
+    assert_eq!(test_process("return QUERY").await, "{}");
 }
 
 #[tokio::test]
@@ -225,50 +225,50 @@ async fn test_query_object() {
         request_with_body("GET", "/index.rhp?id=123&name=hello", None, ""),
     ).await.unwrap();
     let env = setup_env(&context);
-    assert_eq!(process_script_section(env, "return QUERY.id"), "123");
+    assert_eq!(process_script_section(env, "return QUERY.id").await, "123");
 }
 
-#[test]
-fn test_object_falsiness() {
+#[tokio::test]
+async fn test_object_falsiness() {
     assert_eq!(test_process(r"
         let a = {}
         if (a) { return 1 }
         return 2
-    "), "2");
+    ").await, "2");
 }
 
-#[test]
-fn test_object_truthiness() {
+#[tokio::test]
+async fn test_object_truthiness() {
     assert_eq!(test_process(r"
         let a = { ok: true }
         if (a) { return 1 }
         return 2
-    "), "1");
+    ").await, "1");
 }
 
-#[test]
-fn test_object_error_falsiness() {
+#[tokio::test]
+async fn test_object_error_falsiness() {
     assert_eq!(test_process(r"
         let a = { ok: false, error: 'oh no' }
         if (a) { return 1 }
         return 2
-    "), "2");
+    ").await, "2");
 }
 
-#[test]
-fn test_try_syntax() {
+#[tokio::test]
+async fn test_try_syntax() {
     assert_eq!(test_process(r"
         let a = { b: 1 }
         try a
         return 'task complete'
-    "), "task complete");
+    ").await, "task complete");
 
     assert_eq!(test_process(r"
         let a = { b: 1 }
         a.error = 'oh no'
         try a
         return 'task complete'
-    "), "{ b: 1, error: oh no }"); // TODO Should this have quotes?
+    ").await, "{ b: 1, error: oh no }"); // TODO Should this have quotes?
 }
 
 #[tokio::test]
@@ -277,5 +277,5 @@ async fn test_db_ping() {
         request_with_body("GET", "/x", None, ""),
     ).await.unwrap();
     let env = setup_env(&context);
-    assert_eq!(process_script_section(env, "return DB.PING()"), "pong");
+    assert_eq!(process_script_section(env, "return DB.PING()").await, "pong");
 }

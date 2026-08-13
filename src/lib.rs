@@ -53,7 +53,8 @@ async fn process_rhp(path: PathBuf, request: Request) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => {
             let context = Context::from_request(request).await.unwrap();
-            Html(process_src(&src, &context)).into_response()
+            let html = process_src(src, context).await;
+            Html(html).into_response()
         },
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }

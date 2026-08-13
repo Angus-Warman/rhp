@@ -1,6 +1,6 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use async_recursion::async_recursion;
 use crate::lang::ast::*;
 use crate::lang::value::*;
 
@@ -52,13 +52,13 @@ impl Evaluator {
     }
 
     // Entry point: evaluate a list of statements in a given environment
-    pub fn eval_stmts(
+    pub async fn eval_stmts(
         &mut self,
         stmts: &[Stmt],
-        env:   Rc<RefCell<Env>>,
+        env:   Arc<Mutex<Env>>,
     ) -> Result<(), EvalError> {
         for stmt in stmts {
-            if let Err(signal) = self.eval_stmt(stmt, env.clone()) {
+            if let Err(signal) = self.eval_stmt(stmt, env.clone()).await {
                 match signal {
                     Signal::Error(e) => return Err(e),
                     Signal::Return(value) => {
@@ -79,16 +79,17 @@ impl Evaluator {
 
     // ---- Statements ----
 
-    fn eval_stmt(&mut self, stmt: &Stmt, env: Rc<RefCell<Env>>) -> StmtResult {
+    #[async_recursion]
+    async fn eval_stmt(&mut self, stmt: &Stmt, env: Arc<Mutex<Env>>) -> StmtResult {
         match &stmt.node {
             RawStmt::Error => Ok(()), // already reported at parse time
 
             RawStmt::VarDecl { kind: _, name, init } => {
                 let value = match init {
-                    Some(expr) => self.eval_expr(expr, env.clone())?,
+                    Some(expr) => self.eval_expr(expr, env.clone()).await?,
                     None       => Value::Null,
                 };
-                env.borrow_mut().define(name, value);
+                env.lock().unwrap().define(name, value);
                 Ok(())
             }
 
@@ -98,28 +99,28 @@ impl Evaluator {
                     body:     FunctionBody::Block(body.clone()),
                     captured: env.clone(),
                 });
-                env.borrow_mut().define(name, func);
+                env.lock().unwrap().define(name, func);
                 Ok(())
             }
 
             RawStmt::If { cond, then, otherwise } => {
-                let val = self.eval_expr(cond, env.clone())?;
+                let val = self.eval_expr(cond, env.clone()).await?;
                 if val.is_truthy() {
                     let child = Env::new_child(env.clone());
-                    self.eval_block(then, child)?;
+                    self.eval_block(then, child).await?;
                 } else if let Some(else_stmts) = otherwise {
                     let child = Env::new_child(env.clone());
-                    self.eval_block(else_stmts, child)?;
+                    self.eval_block(else_stmts, child).await?;
                 }
                 Ok(())
             }
 
             RawStmt::While { cond, body } => {
                 loop {
-                    let val = self.eval_expr(cond, env.clone())?;
+                    let val = self.eval_expr(cond, env.clone()).await?;
                     if !val.is_truthy() { break; }
                     let child = Env::new_child(env.clone());
-                    match self.eval_block(body, child) {
+                    match self.eval_block(body, child).await {
                         Ok(())                  => {}
                         Err(Signal::Break)      => break,
                         Err(Signal::Continue)   => continue,
@@ -133,17 +134,17 @@ impl Evaluator {
                 let loop_env = Env::new_child(env.clone());
 
                 if let Some(init_stmt) = init {
-                    self.eval_stmt(init_stmt, loop_env.clone())?;
+                    self.eval_stmt(init_stmt, loop_env.clone()).await?;
                 }
 
                 loop {
                     if let Some(cond_expr) = cond {
-                        let val = self.eval_expr(cond_expr, loop_env.clone())?;
+                        let val = self.eval_expr(cond_expr, loop_env.clone()).await?;
                         if !val.is_truthy() { break; }
                     }
 
                     let iter_env = Env::new_child(loop_env.clone());
-                    match self.eval_block(body, iter_env) {
+                    match self.eval_block(body, iter_env).await {
                         Ok(())                => {}
                         Err(Signal::Break)    => break,
                         Err(Signal::Continue) => {}
@@ -151,7 +152,7 @@ impl Evaluator {
                     }
 
                     if let Some(update_expr) = update {
-                        self.eval_expr(update_expr, loop_env.clone())?;
+                        self.eval_expr(update_expr, loop_env.clone()).await?;
                     }
                 }
                 Ok(())
@@ -159,7 +160,7 @@ impl Evaluator {
 
             RawStmt::Return(expr) => {
                 let value = match expr {
-                    Some(e) => self.eval_expr(e, env)?,
+                    Some(e) => self.eval_expr(e, env).await?,
                     None    => Value::Null,
                 };
                 Err(Signal::Return(value))
@@ -169,11 +170,11 @@ impl Evaluator {
             RawStmt::Continue => Err(Signal::Continue),
 
             RawStmt::Expr(expr) => {
-                self.eval_expr(expr, env)?;
+                self.eval_expr(expr, env).await?;
                 Ok(())
             }
             RawStmt::Try(expr) => {
-                let value = self.eval_expr(expr, env)?;
+                let value = self.eval_expr(expr, env).await?;
 
                 if value.is_truthy() {
                     Ok(())
@@ -185,16 +186,18 @@ impl Evaluator {
         }
     }
 
-    fn eval_block(&mut self, stmts: &[Stmt], env: Rc<RefCell<Env>>) -> StmtResult {
+    #[async_recursion]
+    async fn eval_block(&mut self, stmts: &[Stmt], env: Arc<Mutex<Env>>) -> StmtResult {
         for stmt in stmts {
-            self.eval_stmt(stmt, env.clone())?;
+            self.eval_stmt(stmt, env.clone()).await?;
         }
         Ok(())
     }
 
     // ---- Expressions ----
 
-    fn eval_expr(&mut self, expr: &Expr, env: Rc<RefCell<Env>>) -> EvalResult {
+    #[async_recursion]
+    async fn eval_expr(&mut self, expr: &Expr, env: Arc<Mutex<Env>>) -> EvalResult {
         match &expr.node {
             RawExpr::Null        => Ok(Value::Null),
             RawExpr::Bool(b)     => Ok(Value::Bool(*b)),
@@ -202,7 +205,7 @@ impl Evaluator {
             RawExpr::StringLit(s) => Ok(Value::String(s.trim_matches(|c| c == '"' || c == '\'').to_string())),
 
             RawExpr::Ident(name) => {
-                env.borrow().get(name).ok_or_else(|| Signal::Error(EvalError::new(
+                env.lock().unwrap().get(name).ok_or_else(|| Signal::Error(EvalError::new(
                     format!("undefined variable `{}`", name),
                     expr.span.clone(),
                 )))
@@ -211,58 +214,58 @@ impl Evaluator {
             RawExpr::Array(items) => {
                 let mut vals = Vec::new();
                 for item in items {
-                    vals.push(self.eval_expr(item, env.clone())?);
+                    vals.push(self.eval_expr(item, env.clone()).await?);
                 }
-                Ok(Value::Array(Rc::new(RefCell::new(vals))))
+                Ok(Value::Array(Arc::new(Mutex::new(vals))))
             }
 
             RawExpr::Object(pairs) => {
-                let map = Rc::new(RefCell::new(HashMap::new()));
+                let map = Arc::new(Mutex::new(HashMap::new()));
                 for (key, expr) in pairs {
-                    let value = self.eval_expr(expr, env.clone())?;
-                    map.borrow_mut().insert(key.clone(), value);
+                    let value = self.eval_expr(expr, env.clone()).await?;
+                    map.lock().unwrap().insert(key.clone(), value);
                 }
                 Ok(Value::Object(map))
             }
 
             RawExpr::Prefix { op, expr: inner } => {
-                self.eval_prefix(op, inner, env, &expr.span)
+                self.eval_prefix(op, inner, env, &expr.span).await
             }
 
             RawExpr::Postfix { op, expr: inner } => {
-                self.eval_postfix(op, inner, env, &expr.span)
+                self.eval_postfix(op, inner, env, &expr.span).await
             }
 
             RawExpr::Binary { op, left, right } => {
-                self.eval_binary(op, left, right, env, &expr.span)
+                self.eval_binary(op, left, right, env, &expr.span).await
             }
 
             RawExpr::Assign { op, target, value } => {
-                self.eval_assign(op, target, value, env, &expr.span)
+                self.eval_assign(op, target, value, env, &expr.span).await
             }
 
             RawExpr::Ternary { cond, then, otherwise } => {
-                let c = self.eval_expr(cond, env.clone())?;
+                let c = self.eval_expr(cond, env.clone()).await?;
                 if c.is_truthy() {
-                    self.eval_expr(then, env)
+                    self.eval_expr(then, env).await
                 } else {
-                    self.eval_expr(otherwise, env)
+                    self.eval_expr(otherwise, env).await
                 }
             }
 
             RawExpr::Member { object, property } => {
-                let obj = self.eval_expr(object, env)?;
+                let obj = self.eval_expr(object, env).await?;
                 self.eval_member(&obj, property, &expr.span)
             }
 
             RawExpr::Index { object, index } => {
-                let obj = self.eval_expr(object, env.clone())?;
-                let idx = self.eval_expr(index, env)?;
+                let obj = self.eval_expr(object, env.clone()).await?;
+                let idx = self.eval_expr(index, env).await?;
                 self.eval_index(&obj, &idx, &expr.span)
             }
 
             RawExpr::Call { callee, args } => {
-                self.eval_call(callee, args, env, &expr.span)
+                self.eval_call(callee, args, env, &expr.span).await
             }
 
             RawExpr::Arrow { params, body } => {
@@ -280,7 +283,7 @@ impl Evaluator {
             RawExpr::HtmlBlock(stmts) => {
                 // Evaluate stmts; any output they push goes to self.output
                 let child = Env::new_child(env);
-                self.eval_block(stmts, child)
+                self.eval_block(stmts, child).await
                     .map_err(|s| match s {
                         Signal::Error(e) => Signal::Error(e),
                         other => Signal::Error(EvalError::new(
@@ -295,20 +298,21 @@ impl Evaluator {
 
     // ---- Prefix / Postfix ----
 
-    fn eval_prefix(
+    #[async_recursion]
+    async fn eval_prefix(
         &mut self,
         op:   &PrefixOp,
         expr: &Expr,
-        env:  Rc<RefCell<Env>>,
+        env:  Arc<Mutex<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
         match op {
             PrefixOp::Not => {
-                let v = self.eval_expr(expr, env)?;
+                let v = self.eval_expr(expr, env).await?;
                 Ok(Value::Bool(!v.is_truthy()))
             }
             PrefixOp::Neg => {
-                let v = self.eval_expr(expr, env)?;
+                let v = self.eval_expr(expr, env).await?;
                 match v {
                     Value::Number(n) => Ok(Value::Number(-n)),
                     other => Err(Signal::Error(EvalError::new(
@@ -318,34 +322,36 @@ impl Evaluator {
             }
             PrefixOp::PlusPlus | PrefixOp::MinusMinus => {
                 let delta: f64 = if matches!(op, PrefixOp::PlusPlus) { 1.0 } else { -1.0 };
-                let new_val = self.numeric_mutate(expr, delta, env, span)?;
+                let new_val = self.numeric_mutate(expr, delta, env, span).await?;
                 Ok(new_val) // prefix: return new value
             }
         }
     }
 
-    fn eval_postfix(
+    #[async_recursion]
+    async fn eval_postfix(
         &mut self,
         op:   &PostfixOp,
         expr: &Expr,
-        env:  Rc<RefCell<Env>>,
+        env:  Arc<Mutex<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
         let delta: f64 = if matches!(op, PostfixOp::PlusPlus) { 1.0 } else { -1.0 };
-        let old_val = self.eval_expr(expr, env.clone())?;
-        self.numeric_mutate(expr, delta, env, span)?;
+        let old_val = self.eval_expr(expr, env.clone()).await?;
+        self.numeric_mutate(expr, delta, env, span).await?;
         Ok(old_val) // postfix: return old value
     }
 
     // Add `delta` to a numeric lvalue and write it back. Returns the new value.
-    fn numeric_mutate(
+    #[async_recursion]
+    async fn numeric_mutate(
         &mut self,
         target: &Expr,
         delta:  f64,
-        env:    Rc<RefCell<Env>>,
+        env:    Arc<Mutex<Env>>,
         span:   &std::ops::Range<usize>,
     ) -> Result<Value, Signal> {
-        let current = self.eval_expr(target, env.clone())?;
+        let current = self.eval_expr(target, env.clone()).await?;
         let n = match current {
             Value::Number(n) => n,
             other => return Err(Signal::Error(EvalError::new(
@@ -353,35 +359,36 @@ impl Evaluator {
             ))),
         };
         let new_val = Value::Number(n + delta);
-        self.write_target(target, new_val.clone(), env, span)?;
+        self.write_target(target, new_val.clone(), env, span).await?;
         Ok(new_val)
     }
 
     // ---- Binary ----
 
-    fn eval_binary(
+    #[async_recursion]
+    async fn eval_binary(
         &mut self,
         op:    &BinOp,
         left:  &Expr,
         right: &Expr,
-        env:   Rc<RefCell<Env>>,
+        env:   Arc<Mutex<Env>>,
         span:  &std::ops::Range<usize>,
     ) -> EvalResult {
         // Short-circuit for && and ||
         match op {
             BinOp::And => {
-                let l = self.eval_expr(left, env.clone())?;
-                return if !l.is_truthy() { Ok(l) } else { self.eval_expr(right, env) };
+                let l = self.eval_expr(left, env.clone()).await?;
+                return if !l.is_truthy() { Ok(l) } else { self.eval_expr(right, env).await };
             }
             BinOp::Or => {
-                let l = self.eval_expr(left, env.clone())?;
-                return if l.is_truthy() { Ok(l) } else { self.eval_expr(right, env) };
+                let l = self.eval_expr(left, env.clone()).await?;
+                return if l.is_truthy() { Ok(l) } else { self.eval_expr(right, env).await };
             }
             _ => {}
         }
 
-        let l = self.eval_expr(left,  env.clone())?;
-        let r = self.eval_expr(right, env)?;
+        let l = self.eval_expr(left,  env.clone()).await?;
+        let r = self.eval_expr(right, env).await?;
 
         match op {
             BinOp::Add => match (&l, &r) {
@@ -410,20 +417,21 @@ impl Evaluator {
 
     // ---- Assignment ----
 
-    fn eval_assign(
+    #[async_recursion]
+    async fn eval_assign(
         &mut self,
         op:     &AssignOp,
         target: &Expr,
         value:  &Expr,
-        env:    Rc<RefCell<Env>>,
+        env:    Arc<Mutex<Env>>,
         span:   &std::ops::Range<usize>,
     ) -> EvalResult {
-        let rhs = self.eval_expr(value, env.clone())?;
+        let rhs = self.eval_expr(value, env.clone()).await?;
 
         let final_val = if matches!(op, AssignOp::Assign) {
             rhs
         } else {
-            let current = self.eval_expr(target, env.clone())?;
+            let current = self.eval_expr(target, env.clone()).await?;
             match (op, &current, &rhs) {
                 (AssignOp::Add, Value::Number(a), Value::Number(b)) => Value::Number(a + b),
                 (AssignOp::Add, _, _) => Value::String(format!("{}{}", current.display(), rhs.display())),
@@ -436,28 +444,29 @@ impl Evaluator {
             }
         };
 
-        self.write_target(target, final_val.clone(), env, span)?;
+        self.write_target(target, final_val.clone(), env, span).await?;
         Ok(final_val)
     }
 
     // Write a value to an lvalue target: ident, member, or index
-    fn write_target(
+    #[async_recursion]
+    async fn write_target(
         &mut self,
         target:    &Expr,
         value:     Value,
-        env:       Rc<RefCell<Env>>,
+        env:       Arc<Mutex<Env>>,
         span:      &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
         match &target.node {
             RawExpr::Ident(name) => {
-                env.borrow_mut().set(name, value);
+                env.lock().unwrap().set(name, value);
                 Ok(())
             }
             RawExpr::Member { object, property } => {
-                let obj = self.eval_expr(object, env)?;
+                let obj = self.eval_expr(object, env).await?;
                 match obj {
                     Value::Object(map) => {
-                        map.borrow_mut().insert(property.clone(), value);
+                        map.lock().unwrap().insert(property.clone(), value);
                         Ok(())
                     }
                     other => Err(Signal::Error(EvalError::new(
@@ -466,12 +475,12 @@ impl Evaluator {
                 }
             }
             RawExpr::Index { object, index } => {
-                let obj = self.eval_expr(object, env.clone())?;
-                let idx = self.eval_expr(index, env)?;
+                let obj = self.eval_expr(object, env.clone()).await?;
+                let idx = self.eval_expr(index, env).await?;
                 match (&obj, &idx) {
                     (Value::Array(arr), Value::Number(n)) => {
                         let i = *n as usize;
-                        let mut a = arr.borrow_mut();
+                        let mut a = arr.lock().unwrap();
                         if i < a.len() {
                             a[i] = value;
                             Ok(())
@@ -482,7 +491,7 @@ impl Evaluator {
                         }
                     }
                     (Value::Object(map), Value::String(key)) => {
-                        map.borrow_mut().insert(key.clone(), value);
+                        map.lock().unwrap().insert(key.clone(), value);
                         Ok(())
                     }
                     _ => Err(Signal::Error(EvalError::new(
@@ -506,11 +515,11 @@ impl Evaluator {
     ) -> EvalResult {
         match obj {
             Value::Object(map) => {
-                Ok(map.borrow().get(property).cloned().unwrap_or(Value::Null))
+                Ok(map.lock().unwrap().get(property).cloned().unwrap_or(Value::Null))
             }
             Value::Array(arr) => {
                 match property {
-                    "length" => Ok(Value::Number(arr.borrow().len() as f64)),
+                    "length" => Ok(Value::Number(arr.lock().unwrap().len() as f64)),
                     other => Err(Signal::Error(EvalError::new(
                         format!("array has no property `{}`", other), span.clone()
                     ))),
@@ -539,10 +548,10 @@ impl Evaluator {
         match (obj, idx) {
             (Value::Array(arr), Value::Number(n)) => {
                 let i = *n as usize;
-                Ok(arr.borrow().get(i).cloned().unwrap_or(Value::Null))
+                Ok(arr.lock().unwrap().get(i).cloned().unwrap_or(Value::Null))
             }
             (Value::Object(map), Value::String(key)) => {
-                Ok(map.borrow().get(key.as_str()).cloned().unwrap_or(Value::Null))
+                Ok(map.lock().unwrap().get(key.as_str()).cloned().unwrap_or(Value::Null))
             }
             _ => Err(Signal::Error(EvalError::new(
                 format!("cannot index {} with {}", obj.type_name(), idx.type_name()), span.clone()
@@ -552,29 +561,31 @@ impl Evaluator {
 
     // ---- Function calls ----
 
-    fn eval_call(
+    #[async_recursion]
+    async fn eval_call(
         &mut self,
         callee: &Expr,
         args:   &[Expr],
-        env:    Rc<RefCell<Env>>,
+        env:    Arc<Mutex<Env>>,
         span:   &std::ops::Range<usize>,
     ) -> EvalResult {
-        let callee_val = self.eval_expr(callee, env.clone())?;
+        let callee_val = self.eval_expr(callee, env.clone()).await?;
 
         let mut arg_vals = Vec::new();
         for arg in args {
-            arg_vals.push(self.eval_expr(arg, env.clone())?);
+            arg_vals.push(self.eval_expr(arg, env.clone()).await?);
         }
 
         match callee_val {
-            Value::Function(func) => self.call_function(func, arg_vals, span),
+            Value::Function(func) => self.call_function(func, arg_vals, span).await,
             other => Err(Signal::Error(EvalError::new(
                 format!("cannot call {}", other.type_name()), span.clone()
             ))),
         }
     }
 
-    fn call_function(
+    #[async_recursion]
+    async fn call_function(
         &mut self,
         func: Function,
         args: Vec<Value>,
@@ -582,7 +593,7 @@ impl Evaluator {
     ) -> EvalResult {
         match &func.body {
             FunctionBody::Native(f) => {
-                f(args).map_err(Signal::Error)
+                f(args).await.map_err(Signal::Error)
             }
 
             FunctionBody::Block(stmts) => {
@@ -590,7 +601,7 @@ impl Evaluator {
                 let call_env = Env::new_child(func.captured.clone());
                 self.bind_params(&func.params, args, &call_env, span)?;
                 let stmts = stmts.clone();
-                match self.eval_block(&stmts, call_env) {
+                match self.eval_block(&stmts, call_env).await {
                     Ok(())                 => Ok(Value::Null),
                     Err(Signal::Return(v)) => Ok(v),
                     Err(other)             => Err(other),
@@ -601,7 +612,7 @@ impl Evaluator {
                 let call_env = Env::new_child(func.captured.clone());
                 self.bind_params(&func.params, args, &call_env, span)?;
                 let expr = expr.clone();
-                self.eval_expr(&expr, call_env)
+                self.eval_expr(&expr, call_env).await
             }
         }
     }
@@ -610,7 +621,7 @@ impl Evaluator {
         &self,
         params:   &[String],
         args:     Vec<Value>,
-        call_env: &Rc<RefCell<Env>>,
+        call_env: &Arc<Mutex<Env>>,
         span:     &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
         if args.len() != params.len() {
@@ -620,7 +631,7 @@ impl Evaluator {
             )));
         }
         for (name, value) in params.iter().zip(args) {
-            call_env.borrow_mut().define(name, value);
+            call_env.lock().unwrap().define(name, value);
         }
         Ok(())
     }
