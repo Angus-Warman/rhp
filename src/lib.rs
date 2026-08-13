@@ -3,31 +3,36 @@ use std::{path::{Path, PathBuf}};
 use axum::{
     Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any, debug_handler,
 };
+use sqlx::{Any, Pool};
 use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use anyhow::Result;
 
-use crate::process::{process_src, Context};
+use crate::{db::connect, process::{Context, process_src}};
 
 mod lang;
 mod process;
 mod db;
 
-pub async fn run_server(port: u16, folder: PathBuf, _db_conn: &str) {
+pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
-    let app = build_router(folder);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let conn = connect(db_conn).await?;
+    let app = build_router(folder, conn);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     dbg!(&listener);
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 
 #[derive(Clone)]
 struct AppState {
     folder: PathBuf,
+    conn: Pool<Any>,
 }
 
-fn build_router(folder: PathBuf) -> Router {
-    let state = AppState { folder };
+fn build_router(folder: PathBuf, conn: Pool<Any>) -> Router {
+    let state = AppState { folder, conn };
 
     Router::new()
         .route("/{*path}", any(rhp_handler))
