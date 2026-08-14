@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use async_recursion::async_recursion;
-use crate::lang::ast::*;
-use crate::lang::value::*;
+use crate::ast::*;
 
+use crate::value::*;
 #[derive(Debug, Clone)]
 pub struct EvalError {
     pub message: String,

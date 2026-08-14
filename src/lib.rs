@@ -10,9 +10,13 @@ use anyhow::Result;
 
 use crate::{db::{DbConn, connect}, process::{Context, process_src}};
 
-mod lang;
-mod process;
+mod ast;
 mod db;
+mod eval;
+mod lexer;
+mod parser;
+mod process;
+mod value;
 
 pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");

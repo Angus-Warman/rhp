@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use crate::ast::*;
 
-use crate::lang::ast::*;
-use crate::lang::eval::EvalError;
+use crate::eval::EvalError;
 
 #[derive(Debug, Clone)]
 pub struct Env {

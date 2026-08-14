@@ -1,6 +1,6 @@
-use crate::lang::ast::*;
-use crate::lang::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
-use crate::lang::lexer::Span;
+use crate::ast::*;
+use crate::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
+use crate::lexer::Span;
 
 pub struct Parser {
     tokens: Vec<SpannedToken>,
