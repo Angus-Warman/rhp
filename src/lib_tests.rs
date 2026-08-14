@@ -18,6 +18,17 @@ async fn unique_conn() -> DbConn {
     connect(&format!("file%3Arhp_lib_test_{id}?mode=memory&cache=shared")).await.expect("in memory db")
 }
 
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[tokio::test]
 async fn test_hello_world() {
     let server = test_server().await;
@@ -151,4 +162,67 @@ async fn test_crud_workflow() {
 
     // GET: empty again
     assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
+}
+
+#[tokio::test]
+async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
+    let conn = unique_conn().await;
+    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
+    let server = TestServer::new(build_router("./public".into(), conn));
+    server.post("/crud.rhp").json(&serde_json::json!({"name": "widget a"})).await;
+    server.post("/crud.rhp").json(&serde_json::json!({"name": "widget b"})).await;
+
+    // The whole ?id= value is bound as a single literal, so none of these may
+    // leak rows, delete anything, or drop the table.
+    let attacks = [
+        "1 OR 1=1",
+        "' OR 1=1",
+        "1; DROP TABLE widgets",
+        "1'; DROP TABLE widgets",
+        "' UNION SELECT * FROM widgets",
+        "1' OR '1'='1",
+    ];
+    for payload in attacks {
+        let uri = format!("/crud.rhp?id={}", urlencode(payload));
+        assert_eq!(
+            server.get(&uri).await.text().trim(),
+            "[]",
+            "GET {payload} leaked rows"
+        );
+        assert_eq!(
+            server.delete(&uri).await.text().trim(),
+            "{ ok: true, rowsAffected: 0 }",
+            "DELETE {payload} affected rows"
+        );
+    }
+
+    // Neither row was deleted and the table still exists.
+    assert_eq!(
+        server.get("/crud.rhp").await.text().trim(),
+        r#"[{ id: 1, name: "widget a" }, { id: 2, name: "widget b" }]"#
+    );
+}
+
+#[tokio::test]
+async fn test_crud_sql_injection_body_name_stored_safely() {
+    let conn = unique_conn().await;
+    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
+    let server = TestServer::new(build_router("./public".into(), conn));
+
+    // A hostile name is bound as data, not spliced into SQL.
+    assert_eq!(
+        server
+            .post("/crud.rhp")
+            .json(&serde_json::json!({"name": "x'); DROP TABLE widgets;--"}))
+            .await
+            .text()
+            .trim(),
+        "{ ok: true, rowsAffected: 1 }"
+    );
+
+    // The value round-trips unchanged and the table survived.
+    assert_eq!(
+        server.get("/crud.rhp").await.text().trim(),
+        r#"[{ id: 1, name: "x'); DROP TABLE widgets;--" }]"#
+    );
 }
