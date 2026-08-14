@@ -1,4 +1,7 @@
 <rhp method="GET">
+if (QUERY) {
+  return DB.TABLE("widgets").Where({ id: QUERY.id }).All()
+}
 return DB.TABLE("widgets").All()
 </rhp>
 

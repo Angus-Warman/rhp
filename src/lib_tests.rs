@@ -131,6 +131,12 @@ async fn test_crud_workflow() {
         "{ ok: true, rowsAffected: 1 }"
     );
 
+    // GET with ?id= returns just that widget
+    assert_eq!(
+        server.get("/crud.rhp?id=1").await.text().trim(),
+        r#"[{ id: 1, name: "widget a updated" }]"#
+    );
+
     // GET: reflects the rename
     assert_eq!(
         server.get("/crud.rhp").await.text().trim(),
