@@ -26,7 +26,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv()?;
+    dotenv().ok(); // No .env file? Not a problem
     let args = Args::parse();
 
     let port = args.port.context("no port provided")?;
