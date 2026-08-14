@@ -1,7 +1,14 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::*;
 
+static DB_ID: AtomicU64 = AtomicU64::new(0);
+
 async fn test_conn() -> DbConn {
-    crate::db::connect(":memory:").await.unwrap()
+    // sqlite ":memory:" is per-connection, so use a unique named shared
+    // in-memory database per test to keep every pooled connection on the same db.
+    let id = DB_ID.fetch_add(1, Ordering::Relaxed);
+    crate::db::connect(&format!("file%3Arhp_proc_test_{id}?mode=memory&cache=shared")).await.unwrap()
 }
 
 async fn test_process(script: &str) -> String {
@@ -336,4 +343,62 @@ async fn test_db_exec_run_invalid_returns_error_object() {
         if (!res.ok && res.error) { return "error object" }
         return "fail"
     "#).await, "error object");
+}
+
+#[tokio::test]
+async fn test_db_table_returns_stmt_object() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        let t = DB.TABLE("users")
+        if (t.All && t.One && t.Count && t.Columns && t.Insert && t.Update) { return "has methods" }
+        return "fail"
+    "#).await, "has methods");
+}
+
+#[tokio::test]
+async fn test_db_table_all_count() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").Run()
+        let t = DB.TABLE("users")
+        return t.Count() + ":" + t.All().All()
+    "#).await, r#"2:[{ id: 1, name: "alice" }, { id: 2, name: "bob" }]"#);
+}
+
+#[tokio::test]
+async fn test_db_table_one() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice')").Run()
+        return DB.TABLE("users").One().One()
+    "#).await, r#"{ id: 1, name: "alice" }"#);
+}
+
+#[tokio::test]
+async fn test_db_table_columns() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        return DB.TABLE("users").Columns()
+    "#).await, r#"[{ name: "id", type: "INTEGER" }, { name: "name", type: "TEXT" }]"#);
+}
+
+#[tokio::test]
+async fn test_db_table_insert_update() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        let t = DB.TABLE("users")
+        t.Insert({ id: 1, name: "alice" }).Run()
+        t.Insert({ id: 2, name: "bob" }).Run()
+        let updated = t.Update({ name: "renamed" }).Run()
+        let rows = t.All().All()
+        return updated.rowsAffected + ":" + rows
+    "#).await, r#"2:[{ id: 1, name: "renamed" }, { id: 2, name: "renamed" }]"#);
+}
+
+#[tokio::test]
+async fn test_db_table_insert_bad_args() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER)").Run()
+        return DB.TABLE("users").Insert("nope")
+    "#).await, "TableStmt.Insert: expected an object");
 }

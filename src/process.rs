@@ -361,11 +361,31 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             captured: Env::new_root(),
         });
 
+        let table_conn = conn.clone();
+        let table = Value::Function(Function {
+            params: vec!["name".to_string()],
+            body: FunctionBody::Native(Arc::new(move |args| {
+                let conn = table_conn.clone();
+                Box::pin(async move {
+                    let name = match args.first() {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(other) => return Ok(Value::String(format!(
+                            "DB.TABLE: expected a table name, got {}", other.type_name()
+                        ))),
+                        None => return Ok(Value::String("DB.TABLE: expected a table name".to_string())),
+                    };
+                    Ok(table_stmt_to_value(conn.table(&name)))
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
         let db = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
             map.insert("PING".to_string(), ping);
             map.insert("QUERY".to_string(), query); 
             map.insert("EXEC".to_string(), exec); 
+            map.insert("TABLE".to_string(), table); 
             map
         })));
 
@@ -427,6 +447,139 @@ fn exec_stmt_to_value(stmt: crate::db::ExecStmt) -> Value {
     let mut map = HashMap::new();
     map.insert("Run".to_string(), run);
     Value::Object(Arc::new(Mutex::new(map)))
+}
+
+fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
+    let all_stmt = stmt.clone();
+    let all = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = all_stmt.clone();
+            Box::pin(async move {
+                Ok(query_stmt_to_value(stmt.all()))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let one_stmt = stmt.clone();
+    let one = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = one_stmt.clone();
+            Box::pin(async move {
+                Ok(query_stmt_to_value(stmt.one()))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let count_stmt = stmt.clone();
+    let count = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = count_stmt.clone();
+            Box::pin(async move {
+                Ok(Value::Number(stmt.count().await as f64))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let columns_stmt = stmt.clone();
+    let columns = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = columns_stmt.clone();
+            Box::pin(async move {
+                let objects = stmt.columns().await;
+                let values = objects
+                    .into_iter()
+                    .map(|obj| json_to_value(serde_json::Value::Object(obj)))
+                    .collect();
+                Ok(Value::Array(Arc::new(Mutex::new(values))))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let insert_stmt = stmt.clone();
+    let insert = Value::Function(Function {
+        params: vec!["object".to_string()],
+        body: FunctionBody::Native(Arc::new(move |args| {
+            let stmt = insert_stmt.clone();
+            Box::pin(async move {
+                let obj = match args.first().and_then(value_to_object) {
+                    Some(obj) => obj,
+                    None => return Ok(Value::String(
+                        "TableStmt.Insert: expected an object".to_string()
+                    )),
+                };
+                Ok(exec_stmt_to_value(stmt.insert(&obj)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let update_stmt = stmt.clone();
+    let update = Value::Function(Function {
+        params: vec!["object".to_string()],
+        body: FunctionBody::Native(Arc::new(move |args| {
+            let stmt = update_stmt.clone();
+            Box::pin(async move {
+                let obj = match args.first().and_then(value_to_object) {
+                    Some(obj) => obj,
+                    None => return Ok(Value::String(
+                        "TableStmt.Update: expected an object".to_string()
+                    )),
+                };
+                Ok(exec_stmt_to_value(stmt.update(&obj)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let mut map = HashMap::new();
+    map.insert("All".to_string(), all);
+    map.insert("One".to_string(), one);
+    map.insert("Count".to_string(), count);
+    map.insert("Columns".to_string(), columns);
+    map.insert("Insert".to_string(), insert);
+    map.insert("Update".to_string(), update);
+    Value::Object(Arc::new(Mutex::new(map)))
+}
+
+fn value_to_object(v: &Value) -> Option<serde_json::Map<String, serde_json::Value>> {
+    match v {
+        Value::Object(o) => {
+            let lock = o.lock().unwrap();
+            Some(lock.iter().map(|(k, val)| (k.clone(), value_to_json(val))).collect())
+        }
+        _ => None,
+    }
+}
+
+fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Number(n) => serde_json::Number::from_f64(*n)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Array(a) => {
+            serde_json::Value::Array(a.lock().unwrap().iter().map(value_to_json).collect())
+        }
+        Value::Object(o) => {
+            let lock = o.lock().unwrap();
+            let mut map = serde_json::Map::new();
+            for (k, v) in lock.iter() {
+                map.insert(k.clone(), value_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+        Value::Function(_) => serde_json::Value::Null,
+    }
 }
 
 async fn process_script_section(env: Arc<Mutex<Env>>, script: &str) -> String {
