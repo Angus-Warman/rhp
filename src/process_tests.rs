@@ -286,16 +286,53 @@ async fn test_db_ping() {
 
 
 #[tokio::test]
-async fn test_db_query() {
+async fn test_db_query_all() {
     assert_eq!(test_process(r#"
-        return DB.QUERY("SELECT 2")
+        return DB.QUERY("SELECT 2").All()
     "#).await, r#"[{ 2: null }]"#);
 }
 
 #[tokio::test]
-async fn test_db_query_invalid_returns_error_object() {
+async fn test_db_query_one() {
     assert_eq!(test_process(r#"
-        let res = DB.QUERY("SELECT FROM WHERE")[0]
+        return DB.QUERY("SELECT 2").One()
+    "#).await, r#"{ 2: null }"#);
+}
+
+#[tokio::test]
+async fn test_db_query_returns_stmt_object() {
+    assert_eq!(test_process(r#"
+        return DB.QUERY("SELECT 2")
+    "#).await, "{ All: [function], One: [function] }");
+}
+
+#[tokio::test]
+async fn test_db_query_all_invalid_returns_error_object() {
+    assert_eq!(test_process(r#"
+        let res = DB.QUERY("SELECT FROM WHERE").All()[0]
+        if (!res.ok && res.error) { return "error object" }
+        return "fail"
+    "#).await, "error object");
+}
+
+#[tokio::test]
+async fn test_db_exec_run() {
+    assert_eq!(test_process(r#"
+        return DB.EXEC("CREATE TABLE t (id INTEGER)").Run()
+    "#).await, "{ ok: true, rowsAffected: 0 }");
+}
+
+#[tokio::test]
+async fn test_db_exec_returns_stmt_object() {
+    assert_eq!(test_process(r#"
+        return DB.EXEC("CREATE TABLE t (id INTEGER)")
+    "#).await, "{ Run: [function] }");
+}
+
+#[tokio::test]
+async fn test_db_exec_run_invalid_returns_error_object() {
+    assert_eq!(test_process(r#"
+        let res = DB.EXEC("INSEERT INTO nope").Run()
         if (!res.ok && res.error) { return "error object" }
         return "fail"
     "#).await, "error object");

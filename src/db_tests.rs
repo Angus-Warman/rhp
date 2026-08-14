@@ -16,131 +16,154 @@ fn val(s: &str) -> Object {
 }
 
 #[tokio::test]
-async fn test_query_returns_rows() {
+async fn test_query_all_returns_rows() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE users (id INTEGER, name TEXT)").await;
-    conn.query("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").await;
+    conn.exec("CREATE TABLE users (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").run().await;
 
-    let rows = conn.query("SELECT id, name FROM users ORDER BY id").await;
+    let rows = conn.query("SELECT id, name FROM users ORDER BY id").all().await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0], val(r#"{"id":1,"name":"alice"}"#));
     assert_eq!(rows[1], val(r#"{"id":2,"name":"bob"}"#));
 }
 
 #[tokio::test]
-async fn test_query_null_and_numeric_types() {
+async fn test_query_all_null_and_numeric_types() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER, score REAL, note TEXT)").await;
-    conn.query("INSERT INTO t (id, score, note) VALUES (1, 2.5, NULL)").await;
+    conn.exec("CREATE TABLE t (id INTEGER, score REAL, note TEXT)").run().await;
+    conn.exec("INSERT INTO t (id, score, note) VALUES (1, 2.5, NULL)").run().await;
 
-    let rows = conn.query("SELECT id, score, note FROM t").await;
+    let rows = conn.query("SELECT id, score, note FROM t").all().await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0], val(r#"{"id":1,"score":2.5,"note":null}"#));
 }
 
 #[tokio::test]
-async fn test_query_empty_result() {
+async fn test_query_all_empty_result() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER)").await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
 
-    let rows = conn.query("SELECT id FROM t").await;
+    let rows = conn.query("SELECT id FROM t").all().await;
     assert!(rows.is_empty());
 }
 
 #[tokio::test]
-async fn test_query_invalid_sql_returns_error_object() {
+async fn test_query_all_invalid_sql_returns_error_object() {
     let conn = test_conn().await;
-    let rows = conn.query("SELECT FROM WHERE").await;
+    let rows = conn.query("SELECT FROM WHERE").all().await;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("ok"), Some(&Value::Bool(false)));
     assert!(rows[0].get("error").is_some_and(Value::is_string));
+}
+
+#[tokio::test]
+async fn test_query_one_returns_single_object() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO t (id, name) VALUES (7, 'seven')").run().await;
+
+    let row = conn.query("SELECT id, name FROM t").one().await;
+    assert_eq!(row, val(r#"{"id":7,"name":"seven"}"#));
+}
+
+#[tokio::test]
+async fn test_query_one_no_rows_returns_error_object() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+
+    let row = conn.query("SELECT id FROM t").one().await;
+    assert_eq!(row.get("ok"), Some(&Value::Bool(false)));
+    assert!(row.get("error").is_some_and(Value::is_string));
+}
+
+#[tokio::test]
+async fn test_query_one_multiple_rows_returns_first_row() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+    conn.exec("INSERT INTO t (id) VALUES (1), (2)").run().await;
+
+    let row = conn.query("SELECT id FROM t ORDER BY id").one().await;
+    assert_eq!(row, val(r#"{"id":1}"#));
+}
+
+#[tokio::test]
+async fn test_query_one_invalid_sql_returns_error_object() {
+    let conn = test_conn().await;
+    let row = conn.query("SELECT FROM WHERE").one().await;
+
+    assert_eq!(row.get("ok"), Some(&Value::Bool(false)));
+    assert!(row.get("error").is_some_and(Value::is_string));
+}
+
+#[tokio::test]
+async fn test_query_stmt_is_reusable() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+    conn.exec("INSERT INTO t (id) VALUES (1)").run().await;
+
+    let stmt = conn.query("SELECT id FROM t");
+    assert_eq!(stmt.all().await.len(), 1);
+    assert_eq!(stmt.all().await.len(), 1);
+    assert_eq!(stmt.one().await, val(r#"{"id":1}"#));
 }
 
 #[tokio::test]
 async fn test_exec_insert_returns_rows_affected() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER, name TEXT)").await;
+    conn.exec("CREATE TABLE t (id INTEGER, name TEXT)").run().await;
 
-    let rows = conn.query("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b'), (3, 'c')").await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get("ok"), Some(&Value::Bool(true)));
-    assert_eq!(rows[0].get("rowsAffected"), Some(&Value::from(3u64)));
+    let obj = conn.exec("INSERT INTO t (id, name) VALUES (1, 'a'), (2, 'b'), (3, 'c')").run().await;
+    assert_eq!(obj.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(obj.get("rowsAffected"), Some(&Value::from(3u64)));
 }
 
 #[tokio::test]
 async fn test_exec_update_returns_rows_affected() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER)").await;
-    conn.query("INSERT INTO t (id) VALUES (1), (2)").await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+    conn.exec("INSERT INTO t (id) VALUES (1), (2)").run().await;
 
-    let rows = conn.query("UPDATE t SET id = id + 1").await;
-    assert_eq!(rows[0].get("ok"), Some(&Value::Bool(true)));
-    assert_eq!(rows[0].get("rowsAffected"), Some(&Value::from(2u64)));
+    let obj = conn.exec("UPDATE t SET id = id + 1").run().await;
+    assert_eq!(obj.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(obj.get("rowsAffected"), Some(&Value::from(2u64)));
 }
 
 #[tokio::test]
 async fn test_exec_delete_returns_rows_affected() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER)").await;
-    conn.query("INSERT INTO t (id) VALUES (1), (2), (3)").await;
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+    conn.exec("INSERT INTO t (id) VALUES (1), (2), (3)").run().await;
 
-    let rows = conn.query("DELETE FROM t WHERE id > 1").await;
-    assert_eq!(rows[0].get("rowsAffected"), Some(&Value::from(2u64)));
+    let obj = conn.exec("DELETE FROM t WHERE id > 1").run().await;
+    assert_eq!(obj.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(obj.get("rowsAffected"), Some(&Value::from(2u64)));
 }
 
 #[tokio::test]
 async fn test_exec_create_table_returns_rows_affected() {
     let conn = test_conn().await;
-    let rows = conn.query("CREATE TABLE t (id INTEGER)").await;
+    let obj = conn.exec("CREATE TABLE t (id INTEGER)").run().await;
 
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get("ok"), Some(&Value::Bool(true)));
-    assert_eq!(rows[0].get("rowsAffected"), Some(&Value::from(0u64)));
+    assert_eq!(obj.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(obj.get("rowsAffected"), Some(&Value::from(0u64)));
 }
 
 #[tokio::test]
 async fn test_exec_invalid_sql_returns_error_object() {
     let conn = test_conn().await;
-    let rows = conn.query("INSEERT INTO nope").await;
+    let obj = conn.exec("INSEERT INTO nope").run().await;
 
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get("ok"), Some(&Value::Bool(false)));
-    assert!(rows[0].get("error").is_some_and(Value::is_string));
+    assert_eq!(obj.get("ok"), Some(&Value::Bool(false)));
+    assert!(obj.get("error").is_some_and(Value::is_string));
 }
 
 #[tokio::test]
-async fn test_query_after_insert_round_trip() {
+async fn test_query_after_exec_round_trip() {
     let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER, name TEXT)").await;
-    conn.query("INSERT INTO t (id, name) VALUES (7, 'seven')").await;
+    conn.exec("CREATE TABLE t (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO t (id, name) VALUES (7, 'seven')").run().await;
 
-    let rows = conn.query("SELECT id, name FROM t").await;
+    let rows = conn.query("SELECT id, name FROM t").all().await;
     assert_eq!(rows, vec![val(r#"{"id":7,"name":"seven"}"#)]);
-}
-
-#[tokio::test]
-async fn test_returning_treated_as_query() {
-    let conn = test_conn().await;
-    conn.query("CREATE TABLE t (id INTEGER)").await;
-
-    let rows = conn.query("INSERT INTO t (id) VALUES (1) RETURNING id").await;
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0], val(r#"{"id":1}"#));
-}
-
-#[tokio::test]
-async fn test_is_query_classification() {
-    assert!(is_query("SELECT * FROM t"));
-    assert!(is_query("  select 1"));
-    assert!(is_query("-- comment\nSELECT * FROM t"));
-    assert!(is_query("WITH x AS (SELECT 1) SELECT * FROM x"));
-    assert!(is_query("PRAGMA user_version"));
-    assert!(is_query("INSERT INTO t (id) VALUES (1) RETURNING id"));
-
-    assert!(!is_query("INSERT INTO t (id) VALUES (1)"));
-    assert!(!is_query("UPDATE t SET id = 1"));
-    assert!(!is_query("DELETE FROM t"));
-    assert!(!is_query("CREATE TABLE t (id INTEGER)"));
-    assert!(!is_query("DROP TABLE t"));
 }

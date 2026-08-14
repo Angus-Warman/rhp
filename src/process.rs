@@ -336,12 +336,26 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         ))),
                         None => return Ok(Value::String("DB.QUERY: expected a SQL string".to_string())),
                     };
-                    let objects = conn.query(&sql).await;
-                    let values = objects
-                        .into_iter()
-                        .map(|obj| json_to_value(serde_json::Value::Object(obj)))
-                        .collect();
-                    Ok(Value::Array(Arc::new(Mutex::new(values))))
+                    Ok(query_stmt_to_value(conn.query(&sql)))
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let exec_conn = conn.clone();
+        let exec = Value::Function(Function {
+            params: vec!["sql".to_string()],
+            body: FunctionBody::Native(Arc::new(move |args| {
+                let conn = exec_conn.clone();
+                Box::pin(async move {
+                    let sql = match args.first() {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(other) => return Ok(Value::String(format!(
+                            "DB.EXEC: expected a SQL string, got {}", other.type_name()
+                        ))),
+                        None => return Ok(Value::String("DB.EXEC: expected a SQL string".to_string())),
+                    };
+                    Ok(exec_stmt_to_value(conn.exec(&sql)))
                 })
             })),
             captured: Env::new_root(),
@@ -351,6 +365,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             let mut map = HashMap::new();
             map.insert("PING".to_string(), ping);
             map.insert("QUERY".to_string(), query); 
+            map.insert("EXEC".to_string(), exec); 
             map
         })));
 
@@ -358,6 +373,60 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
     }
 
     env
+}
+
+fn query_stmt_to_value(stmt: crate::db::QueryStmt) -> Value {
+    let all_stmt = stmt.clone();
+    let all = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = all_stmt.clone();
+            Box::pin(async move {
+                let objects = stmt.all().await;
+                let values = objects
+                    .into_iter()
+                    .map(|obj| json_to_value(serde_json::Value::Object(obj)))
+                    .collect();
+                Ok(Value::Array(Arc::new(Mutex::new(values))))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let one = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = stmt.clone();
+            Box::pin(async move {
+                let obj = stmt.one().await;
+                Ok(json_to_value(serde_json::Value::Object(obj)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let mut map = HashMap::new();
+    map.insert("All".to_string(), all);
+    map.insert("One".to_string(), one);
+    Value::Object(Arc::new(Mutex::new(map)))
+}
+
+fn exec_stmt_to_value(stmt: crate::db::ExecStmt) -> Value {
+    let run = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = stmt.clone();
+            Box::pin(async move {
+                let obj = stmt.run().await;
+                Ok(json_to_value(serde_json::Value::Object(obj)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let mut map = HashMap::new();
+    map.insert("Run".to_string(), run);
+    Value::Object(Arc::new(Mutex::new(map)))
 }
 
 async fn process_script_section(env: Arc<Mutex<Env>>, script: &str) -> String {
