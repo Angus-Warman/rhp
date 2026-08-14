@@ -336,9 +336,12 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         ))),
                         None => return Ok(Value::String("DB.QUERY: expected a SQL string".to_string())),
                     };
-                    let res = conn.query(&sql).await;
-                    let text = res.unwrap(); // On error, should return { ok: false, error: msg }
-                    Ok(Value::String(text))
+                    let objects = conn.query(&sql).await;
+                    let values = objects
+                        .into_iter()
+                        .map(|obj| json_to_value(serde_json::Value::Object(obj)))
+                        .collect();
+                    Ok(Value::Array(Arc::new(Mutex::new(values))))
                 })
             })),
             captured: Env::new_root(),

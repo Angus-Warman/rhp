@@ -289,5 +289,14 @@ async fn test_db_ping() {
 async fn test_db_query() {
     assert_eq!(test_process(r#"
         return DB.QUERY("SELECT 2")
-    "#).await, r#"[{"2":null}]"#);
+    "#).await, r#"[{ 2: null }]"#);
+}
+
+#[tokio::test]
+async fn test_db_query_invalid_returns_error_object() {
+    assert_eq!(test_process(r#"
+        let res = DB.QUERY("SELECT FROM WHERE")[0]
+        if (!res.ok && res.error) { return "error object" }
+        return "fail"
+    "#).await, "error object");
 }
