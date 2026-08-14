@@ -539,6 +539,36 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         captured: Env::new_root(),
     });
 
+    let where_stmt = stmt.clone();
+    let where_fn = Value::Function(Function {
+        params: vec!["conditions".to_string()],
+        body: FunctionBody::Native(Arc::new(move |args| {
+            let stmt = where_stmt.clone();
+            Box::pin(async move {
+                let conditions = match args.first().and_then(value_to_object) {
+                    Some(obj) => obj,
+                    None => return Ok(Value::String(
+                        "TableStmt.Where: expected an object".to_string()
+                    )),
+                };
+                Ok(table_stmt_to_value(stmt.where_(&conditions)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
+    let delete_stmt = stmt.clone();
+    let delete = Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |_args| {
+            let stmt = delete_stmt.clone();
+            Box::pin(async move {
+                Ok(exec_stmt_to_value(stmt.delete()))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
     let mut map = HashMap::new();
     map.insert("All".to_string(), all);
     map.insert("One".to_string(), one);
@@ -546,6 +576,8 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
     map.insert("Columns".to_string(), columns);
     map.insert("Insert".to_string(), insert);
     map.insert("Update".to_string(), update);
+    map.insert("Where".to_string(), where_fn);
+    map.insert("Delete".to_string(), delete);
     Value::Object(Arc::new(Mutex::new(map)))
 }
 

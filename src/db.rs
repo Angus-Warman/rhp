@@ -26,6 +26,7 @@ pub struct ExecStmt {
 #[derive(Clone)]
 pub struct TableStmt {
     table: String,
+    conditions: Object,
     pool: AnyPool,
 }
 
@@ -76,7 +77,7 @@ impl DbConn {
 
     /// Lazily build statements targeting a single table.
     pub fn table(&self, name: &str) -> TableStmt {
-        TableStmt { table: name.to_string(), pool: self.pool.clone() }
+        TableStmt { table: name.to_string(), conditions: Map::new(), pool: self.pool.clone() }
     }
 }
 
@@ -166,21 +167,36 @@ impl ExecStmt {
 }
 
 impl TableStmt {
-    fn query(&self, sql: String) -> QueryStmt {
-        QueryStmt { sql, binds: Vec::new(), pool: self.pool.clone() }
+    fn query(&self, sql: String, binds: Vec<BindValue>) -> QueryStmt {
+        QueryStmt { sql, binds, pool: self.pool.clone() }
     }
 
-    /// `SELECT * FROM <table>` as a lazy [`QueryStmt`].
+    /// Narrow the statements to rows matching every condition (`col = value`).
+    /// Returns a new `TableStmt`; further calls to `where_` are ANDed together.
+    pub fn where_(&self, conditions: &Object) -> TableStmt {
+        let mut merged = self.conditions.clone();
+        for (k, v) in conditions {
+            merged.insert(k.clone(), v.clone());
+        }
+        TableStmt { table: self.table.clone(), conditions: merged, pool: self.pool.clone() }
+    }
+
+    /// `SELECT * FROM <table> [WHERE ...]` as a lazy [`QueryStmt`].
     pub fn all(&self) -> QueryStmt {
-        self.query(format!("SELECT * FROM {}", quote_ident(&self.table)))
+        let (clause, binds) = where_clause(&self.conditions);
+        self.query(format!("SELECT * FROM {}{}", quote_ident(&self.table), clause), binds)
     }
 
-    /// `SELECT * FROM <table> LIMIT 1` as a lazy [`QueryStmt`].
+    /// `SELECT * FROM <table> [WHERE ...] LIMIT 1` as a lazy [`QueryStmt`].
     pub fn one(&self) -> QueryStmt {
-        self.query(format!("SELECT * FROM {} LIMIT 1", quote_ident(&self.table)))
+        let (clause, binds) = where_clause(&self.conditions);
+        self.query(
+            format!("SELECT * FROM {}{} LIMIT 1", quote_ident(&self.table), clause),
+            binds,
+        )
     }
 
-    /// Return the number of rows in the table.
+    /// Return the number of rows in the table matching the conditions.
     pub async fn count(&self) -> i64 {
         // sqlx's Any driver only decodes columns that have a declared type, and
         // SQLite gives aggregates/expressions no declared type, so `COUNT(*)`
@@ -234,20 +250,48 @@ impl TableStmt {
         }
     }
 
-    /// Build an `UPDATE` from an object of column -> value. Applies to every
-    /// row (there is no WHERE clause).
+    /// Build an `UPDATE` from an object of column -> value, restricted to the
+    /// rows matching the conditions. With no conditions it applies to every row.
     pub fn update(&self, values: &Object) -> ExecStmt {
-        let sql = format!(
-            "UPDATE {} SET {}",
-            quote_ident(&self.table),
-            values.keys().map(|c| format!("{} = ?", quote_ident(c))).collect::<Vec<_>>().join(", "),
-        );
+        let set = values.keys().map(|c| format!("{} = ?", quote_ident(c))).collect::<Vec<_>>().join(", ");
+        let (clause, where_binds) = where_clause(&self.conditions);
+        let mut binds = values.values().map(BindValue::from_json).collect::<Vec<_>>();
+        binds.extend(where_binds);
         ExecStmt {
-            sql,
-            binds: values.values().map(BindValue::from_json).collect(),
+            sql: format!("UPDATE {} SET {}{}", quote_ident(&self.table), set, clause),
+            binds,
             pool: self.pool.clone(),
         }
     }
+
+    /// Build a `DELETE` for the rows matching the conditions. With no
+    /// conditions it deletes every row.
+    pub fn delete(&self) -> ExecStmt {
+        let (clause, binds) = where_clause(&self.conditions);
+        ExecStmt {
+            sql: format!("DELETE FROM {}{}", quote_ident(&self.table), clause),
+            binds,
+            pool: self.pool.clone(),
+        }
+    }
+}
+
+/// Build the SQL and binds for `WHERE col1 = ? AND col2 = ? ...` from an
+/// object of conditions. Returns an empty clause for an empty object.
+fn where_clause(conditions: &Object) -> (String, Vec<BindValue>) {
+    if conditions.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    let mut binds = Vec::with_capacity(conditions.len());
+    let parts = conditions
+        .iter()
+        .map(|(k, v)| {
+            binds.push(BindValue::from_json(v));
+            format!("{} = ?", quote_ident(k))
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    (format!(" WHERE {parts}"), binds)
 }
 
 fn quote_ident(ident: &str) -> String {

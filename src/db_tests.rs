@@ -269,3 +269,71 @@ async fn test_table_insert_binds_types() {
     let rows = conn.query("SELECT i, f, s, b FROM t").all().await;
     assert_eq!(rows, vec![val(r#"{"i":42,"f":1.5,"s":"it's a quote","b":1}"#)]);
 }
+
+#[tokio::test]
+async fn test_table_where_all() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE users (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").run().await;
+
+    let cond = Map::from_iter([("id".to_string(), Value::from(2))]);
+    let rows = conn.table("users").where_(&cond).all().all().await;
+    assert_eq!(rows, vec![val(r#"{"id":2,"name":"bob"}"#)]);
+}
+
+#[tokio::test]
+async fn test_table_where_and_chaining() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (a INTEGER, b INTEGER)").run().await;
+    conn.exec("INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 1)").run().await;
+
+    let cond1 = Map::from_iter([("a".to_string(), Value::from(1))]);
+    let cond2 = Map::from_iter([("b".to_string(), Value::from(1))]);
+    let rows = conn.table("t").where_(&cond1).where_(&cond2).all().all().await;
+    assert_eq!(rows, vec![val(r#"{"a":1,"b":1}"#)]);
+}
+
+#[tokio::test]
+async fn test_table_where_update() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE users (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").run().await;
+
+    let mut values = Map::new();
+    values.insert("name".to_string(), Value::from("renamed"));
+    let cond = Map::from_iter([("id".to_string(), Value::from(1))]);
+    let result = conn.table("users").where_(&cond).update(&values).run().await;
+    assert_eq!(result.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(result.get("rowsAffected"), Some(&Value::from(1u64)));
+
+    let rows = conn.table("users").all().all().await;
+    assert_eq!(rows, vec![
+        val(r#"{"id":1,"name":"renamed"}"#),
+        val(r#"{"id":2,"name":"bob"}"#),
+    ]);
+}
+
+#[tokio::test]
+async fn test_table_delete() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE users (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").run().await;
+
+    let cond = Map::from_iter([("id".to_string(), Value::from(1))]);
+    let result = conn.table("users").where_(&cond).delete().run().await;
+    assert_eq!(result.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(result.get("rowsAffected"), Some(&Value::from(1u64)));
+
+    let rows = conn.table("users").all().all().await;
+    assert_eq!(rows, vec![val(r#"{"id":2,"name":"bob"}"#)]);
+}
+
+#[tokio::test]
+async fn test_table_where_count() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE users (id INTEGER, name TEXT)").run().await;
+    conn.exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").run().await;
+
+    let cond = Map::from_iter([("name".to_string(), Value::from("bob"))]);
+    assert_eq!(conn.table("users").where_(&cond).count().await, 1);
+}

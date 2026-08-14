@@ -1,10 +1,21 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::*;
 
 use axum_test::TestServer;
 
+static DB_ID: AtomicU64 = AtomicU64::new(0);
+
 async fn test_server() -> TestServer {
-    let conn =  connect(":memory:").await.expect("in memory db");
+    let conn = unique_conn().await;
     TestServer::new(build_router("./public".into(), conn))
+}
+
+async fn unique_conn() -> DbConn {
+    // sqlite ":memory:" is per-connection, so use a unique named shared
+    // in-memory database per test to keep every pooled connection on the same db.
+    let id = DB_ID.fetch_add(1, Ordering::Relaxed);
+    connect(&format!("file%3Arhp_lib_test_{id}?mode=memory&cache=shared")).await.expect("in memory db")
 }
 
 #[tokio::test]
@@ -91,4 +102,47 @@ async fn test_body_global_invalid_json_is_400() {
         .content_type("application/json")
         .await;
     response.assert_status_bad_request();
+}
+
+#[tokio::test]
+async fn test_crud_workflow() {
+    let conn = unique_conn().await;
+    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
+    let server = TestServer::new(build_router("./public".into(), conn));
+
+    // GET: no widgets yet
+    assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
+
+    // POST: create a widget
+    assert_eq!(
+        server.post("/crud.rhp").json(&serde_json::json!({"name": "widget a"})).await.text().trim(),
+        "{ ok: true, rowsAffected: 1 }"
+    );
+
+    // GET: now lists it
+    assert_eq!(
+        server.get("/crud.rhp").await.text().trim(),
+        r#"[{ id: 1, name: "widget a" }]"#
+    );
+
+    // PUT: rename it by id
+    assert_eq!(
+        server.put("/crud.rhp?id=1").json(&serde_json::json!({"name": "widget a updated"})).await.text().trim(),
+        "{ ok: true, rowsAffected: 1 }"
+    );
+
+    // GET: reflects the rename
+    assert_eq!(
+        server.get("/crud.rhp").await.text().trim(),
+        r#"[{ id: 1, name: "widget a updated" }]"#
+    );
+
+    // DELETE: remove it by id
+    assert_eq!(
+        server.delete("/crud.rhp?id=1").await.text().trim(),
+        "{ ok: true, rowsAffected: 1 }"
+    );
+
+    // GET: empty again
+    assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
 }

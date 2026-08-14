@@ -402,3 +402,15 @@ async fn test_db_table_insert_bad_args() {
         return DB.TABLE("users").Insert("nope")
     "#).await, "TableStmt.Insert: expected an object");
 }
+
+#[tokio::test]
+async fn test_db_table_where_delete_from_script() {
+    assert_eq!(test_process(r#"
+        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.TABLE("users").Insert({ id: 1, name: "alice" }).Run()
+        DB.TABLE("users").Insert({ id: 2, name: "bob" }).Run()
+        let t = DB.TABLE("users").Where({ id: 2 })
+        let deleted = t.Delete().Run()
+        return deleted.rowsAffected + ":" + t.Count() + ":" + DB.TABLE("users").Count()
+    "#).await, "1:0:1");
+}

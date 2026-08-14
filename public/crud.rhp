@@ -1,0 +1,15 @@
+<rhp method="GET">
+return DB.TABLE("widgets").All().All()
+</rhp>
+
+<rhp method="POST">
+return DB.TABLE("widgets").Insert(BODY).Run()
+</rhp>
+
+<rhp method="PUT">
+return DB.TABLE("widgets").Where({ id: QUERY.id }).Update(BODY).Run()
+</rhp>
+
+<rhp method="DELETE">
+return DB.TABLE("widgets").Where({ id: QUERY.id }).Delete().Run()
+</rhp>
