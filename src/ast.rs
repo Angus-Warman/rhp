@@ -17,30 +17,53 @@ pub enum RawExpr {
     Ident(String),
 
     // Unary: !x, -x, ++x, --x, x++, x--
-    Prefix { op: PrefixOp, expr: Box<Expr> },
-    Postfix { op: PostfixOp, expr: Box<Expr> },
+    Prefix {
+        op: PrefixOp,
+        expr: Box<Expr>,
+    },
+    Postfix {
+        op: PostfixOp,
+        expr: Box<Expr>,
+    },
 
     // Binary: a + b, a === b, etc.
-    Binary { op: BinOp, left: Box<Expr>, right: Box<Expr> },
+    Binary {
+        op: BinOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
     // Assignment: a = b, a += b, etc.
-    Assign { op: AssignOp, target: Box<Expr>, value: Box<Expr> },
+    Assign {
+        op: AssignOp,
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
 
     // Ternary: cond ? then : else
     Ternary {
-        cond:      Box<Expr>,
-        then:      Box<Expr>,
+        cond: Box<Expr>,
+        then: Box<Expr>,
         otherwise: Box<Expr>,
     },
 
     // Member access: a.b
-    Member { object: Box<Expr>, property: String },
+    Member {
+        object: Box<Expr>,
+        property: String,
+    },
 
     // Index access: a[b]
-    Index { object: Box<Expr>, index: Box<Expr> },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
 
     // Call: f(a, b)
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
 
     // Array literal: [a, b, c]
     Array(Vec<Expr>),
@@ -49,7 +72,10 @@ pub enum RawExpr {
     Object(Vec<(String, Expr)>),
 
     // Arrow function: (a, b) => expr  |  (a, b) => { stmts }
-    Arrow { params: Vec<String>, body: ArrowBody },
+    Arrow {
+        params: Vec<String>,
+        body: ArrowBody,
+    },
 
     // <html> ... </html> block inside script
     HtmlBlock(Vec<Stmt>),
@@ -62,44 +88,84 @@ pub enum ArrowBody {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PrefixOp  { Neg, Not, PlusPlus, MinusMinus }
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PostfixOp { PlusPlus, MinusMinus }
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
-    Eq, Neq, StrictEq, StrictNeq,
-    Lt, Lte, Gt, Gte,
-    And, Or,
+pub enum PrefixOp {
+    Neg,
+    Not,
+    PlusPlus,
+    MinusMinus,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum AssignOp { Assign, Add, Sub, Mul, Div }
+pub enum PostfixOp {
+    PlusPlus,
+    MinusMinus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Neq,
+    StrictEq,
+    StrictNeq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignOp {
+    Assign,
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
 
 // ---- Statements ----
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RawStmt {
     // let/const/var x = expr;
-    VarDecl { kind: VarKind, name: String, init: Option<Expr> },
+    VarDecl {
+        kind: VarKind,
+        name: String,
+        init: Option<Expr>,
+    },
 
     // function f(a, b) { ... }
-    FunctionDecl { name: String, params: Vec<String>, body: Vec<Stmt> },
+    FunctionDecl {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Stmt>,
+    },
 
     // if (cond) { ... } else { ... }
-    If { cond: Expr, then: Vec<Stmt>, otherwise: Option<Vec<Stmt>> },
+    If {
+        cond: Expr,
+        then: Vec<Stmt>,
+        otherwise: Option<Vec<Stmt>>,
+    },
 
     // while (cond) { ... }
-    While { cond: Expr, body: Vec<Stmt> },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
 
     // for (init; cond; update) { ... }
     For {
-        init:   Option<Box<Stmt>>,
-        cond:   Option<Expr>,
+        init: Option<Box<Stmt>>,
+        cond: Option<Expr>,
         update: Option<Expr>,
-        body:   Vec<Stmt>,
+        body: Vec<Stmt>,
     },
 
     Return(Option<Expr>),
@@ -115,4 +181,8 @@ pub enum RawStmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum VarKind { Let, Const, Var }
+pub enum VarKind {
+    Let,
+    Const,
+    Var,
+}

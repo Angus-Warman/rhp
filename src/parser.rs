@@ -1,16 +1,20 @@
 use crate::ast::*;
-use crate::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
 use crate::lexer::Span;
+use crate::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
 
 pub struct Parser {
     tokens: Vec<SpannedToken>,
-    pos:    usize,
+    pos: usize,
     errors: Vec<ParseError>,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
-        Self { tokens, pos: 0, errors: Vec::new() }
+        Self {
+            tokens,
+            pos: 0,
+            errors: Vec::new(),
+        }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -32,7 +36,9 @@ impl Parser {
 
     fn advance(&mut self) -> Option<&SpannedToken> {
         let t = self.tokens.get(self.pos);
-        if t.is_some() { self.pos += 1; }
+        if t.is_some() {
+            self.pos += 1;
+        }
         t
     }
 
@@ -48,7 +54,10 @@ impl Parser {
             Some(span)
         } else {
             let span = self.current_span();
-            self.errors.push(ParseError { message: msg.to_string(), span });
+            self.errors.push(ParseError {
+                message: msg.to_string(),
+                span,
+            });
             None
         }
     }
@@ -67,15 +76,26 @@ impl Parser {
         loop {
             match self.peek() {
                 None => break,
-                Some(Token::Semicolon) => { self.advance(); break; }
-                Some(Token::RBrace)    => break, // don't consume, parent needs it
+                Some(Token::Semicolon) => {
+                    self.advance();
+                    break;
+                }
+                Some(Token::RBrace) => break, // don't consume, parent needs it
                 Some(
-                    Token::Let | Token::Const | Token::Var |
-                    Token::If  | Token::For   | Token::While |
-                    Token::Return | Token::Break | Token::Continue |
-                    Token::Function
+                    Token::Let
+                    | Token::Const
+                    | Token::Var
+                    | Token::If
+                    | Token::For
+                    | Token::While
+                    | Token::Return
+                    | Token::Break
+                    | Token::Continue
+                    | Token::Function,
                 ) => break,
-                _ => { self.advance(); }
+                _ => {
+                    self.advance();
+                }
             }
         }
     }
@@ -111,24 +131,34 @@ impl Parser {
         let start = self.current_span().start;
 
         let result = match self.peek() {
-            Some(Token::Let)      => self.parse_var_decl(VarKind::Let),
-            Some(Token::Const)    => self.parse_var_decl(VarKind::Const),
-            Some(Token::Var)      => self.parse_var_decl(VarKind::Var),
+            Some(Token::Let) => self.parse_var_decl(VarKind::Let),
+            Some(Token::Const) => self.parse_var_decl(VarKind::Const),
+            Some(Token::Var) => self.parse_var_decl(VarKind::Var),
             Some(Token::Function) => self.parse_function_decl(),
-            Some(Token::If)       => self.parse_if(),
-            Some(Token::While)    => self.parse_while(),
-            Some(Token::For)      => self.parse_for(),
-            Some(Token::Return)   => self.parse_return(),
-            Some(Token::Try)   => self.parse_try(),
-            Some(Token::Break)    => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Break) }
-            Some(Token::Continue) => { self.advance(); self.eat(&Token::Semicolon); Ok(RawStmt::Continue) }
+            Some(Token::If) => self.parse_if(),
+            Some(Token::While) => self.parse_while(),
+            Some(Token::For) => self.parse_for(),
+            Some(Token::Return) => self.parse_return(),
+            Some(Token::Try) => self.parse_try(),
+            Some(Token::Break) => {
+                self.advance();
+                self.eat(&Token::Semicolon);
+                Ok(RawStmt::Break)
+            }
+            Some(Token::Continue) => {
+                self.advance();
+                self.eat(&Token::Semicolon);
+                Ok(RawStmt::Continue)
+            }
             Some(Token::HtmlOpen) => self.parse_html_block_stmt(),
             _ => self.parse_expr_stmt(),
         };
 
         match result {
             Ok(node) => {
-                let end = self.tokens.get(self.pos.saturating_sub(1))
+                let end = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
                     .map(|t| t.span.end)
                     .unwrap_or(start);
                 Spanned::new(node, start..end)
@@ -156,9 +186,9 @@ impl Parser {
 
     fn parse_function_decl(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat `function`
-        let name   = self.expect_ident("expected function name")?;
+        let name = self.expect_ident("expected function name")?;
         let params = self.parse_params()?;
-        let body   = self.parse_block();
+        let body = self.parse_block();
         Ok(RawStmt::FunctionDecl { name, params, body })
     }
 
@@ -179,7 +209,11 @@ impl Parser {
         } else {
             None
         };
-        Ok(RawStmt::If { cond, then, otherwise })
+        Ok(RawStmt::If {
+            cond,
+            then,
+            otherwise,
+        })
     }
 
     fn parse_while(&mut self) -> Result<RawStmt, ParseError> {
@@ -221,7 +255,12 @@ impl Parser {
         self.expect(&Token::RParen, "expected `)`");
 
         let body = self.parse_block();
-        Ok(RawStmt::For { init, cond, update, body })
+        Ok(RawStmt::For {
+            init,
+            cond,
+            update,
+            body,
+        })
     }
 
     fn parse_return(&mut self) -> Result<RawStmt, ParseError> {
@@ -263,12 +302,18 @@ impl Parser {
         match self.peek() {
             Some(Token::Ident(_)) => {
                 let t = self.advance().unwrap();
-                if let Token::Ident(s) = &t.node { Ok(s.clone()) }
-                else { unreachable!() }
+                if let Token::Ident(s) = &t.node {
+                    Ok(s.clone())
+                } else {
+                    unreachable!()
+                }
             }
             _ => {
                 let span = self.current_span();
-                Err(ParseError { message: msg.to_string(), span })
+                Err(ParseError {
+                    message: msg.to_string(),
+                    span,
+                })
             }
         }
     }
@@ -278,7 +323,9 @@ impl Parser {
         let mut params = Vec::new();
         while self.peek() != Some(&Token::RParen) && !self.is_at_end() {
             params.push(self.expect_ident("expected parameter name")?);
-            if !self.eat(&Token::Comma) { break; }
+            if !self.eat(&Token::Comma) {
+                break;
+            }
         }
         self.expect(&Token::RParen, "expected `)`");
         Ok(params)
@@ -293,11 +340,11 @@ impl Parser {
         let left = self.parse_pratt(0)?;
 
         let op = match self.peek() {
-            Some(Token::Assign)    => Some(AssignOp::Assign),
-            Some(Token::PlusAssign)  => Some(AssignOp::Add),
+            Some(Token::Assign) => Some(AssignOp::Assign),
+            Some(Token::PlusAssign) => Some(AssignOp::Add),
             Some(Token::MinusAssign) => Some(AssignOp::Sub),
-            Some(Token::MulAssign)   => Some(AssignOp::Mul),
-            Some(Token::DivAssign)   => Some(AssignOp::Div),
+            Some(Token::MulAssign) => Some(AssignOp::Mul),
+            Some(Token::DivAssign) => Some(AssignOp::Div),
             _ => None,
         };
 
@@ -306,7 +353,11 @@ impl Parser {
             let right = self.parse_assign()?; // right-associative
             let span = merge_spans(&left.span, &right.span);
             return Ok(Spanned::new(
-                RawExpr::Assign { op, target: Box::new(left), value: Box::new(right) },
+                RawExpr::Assign {
+                    op,
+                    target: Box::new(left),
+                    value: Box::new(right),
+                },
                 span,
             ));
         }
@@ -320,7 +371,9 @@ impl Parser {
         loop {
             // Ternary
             if self.peek() == Some(&Token::Question) {
-                if min_bp > 0 { break; } // ternary has very low precedence
+                if min_bp > 0 {
+                    break;
+                } // ternary has very low precedence
                 self.advance();
                 let then = self.parse_pratt(0)?;
                 self.expect(&Token::Colon, "expected `:` in ternary");
@@ -328,8 +381,8 @@ impl Parser {
                 let span = merge_spans(&left.span, &otherwise.span);
                 left = Spanned::new(
                     RawExpr::Ternary {
-                        cond:      Box::new(left),
-                        then:      Box::new(then),
+                        cond: Box::new(left),
+                        then: Box::new(then),
                         otherwise: Box::new(otherwise),
                     },
                     span,
@@ -339,13 +392,19 @@ impl Parser {
 
             let Some(op) = self.peek_binop() else { break };
             let (l_bp, r_bp) = infix_binding_power(&op);
-            if l_bp < min_bp { break; }
+            if l_bp < min_bp {
+                break;
+            }
 
             self.advance();
             let right = self.parse_pratt(r_bp)?;
             let span = merge_spans(&left.span, &right.span);
             left = Spanned::new(
-                RawExpr::Binary { op, left: Box::new(left), right: Box::new(right) },
+                RawExpr::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
                 span,
             );
         }
@@ -357,9 +416,9 @@ impl Parser {
         let start = self.current_span().start;
 
         let prefix = match self.peek() {
-            Some(Token::Not)        => Some(PrefixOp::Not),
-            Some(Token::Minus)      => Some(PrefixOp::Neg),
-            Some(Token::PlusPlus)   => Some(PrefixOp::PlusPlus),
+            Some(Token::Not) => Some(PrefixOp::Not),
+            Some(Token::Minus) => Some(PrefixOp::Neg),
+            Some(Token::PlusPlus) => Some(PrefixOp::PlusPlus),
             Some(Token::MinusMinus) => Some(PrefixOp::MinusMinus),
             _ => None,
         };
@@ -367,8 +426,14 @@ impl Parser {
         if let Some(op) = prefix {
             self.advance();
             let expr = self.parse_unary()?;
-            let end  = expr.span.end;
-            return Ok(Spanned::new(RawExpr::Prefix { op, expr: Box::new(expr) }, start..end));
+            let end = expr.span.end;
+            return Ok(Spanned::new(
+                RawExpr::Prefix {
+                    op,
+                    expr: Box::new(expr),
+                },
+                start..end,
+            ));
         }
 
         self.parse_postfix()
@@ -383,13 +448,25 @@ impl Parser {
                     let end = self.current_span().end;
                     self.advance();
                     let span = expr.span.start..end;
-                    expr = Spanned::new(RawExpr::Postfix { op: PostfixOp::PlusPlus, expr: Box::new(expr) }, span);
+                    expr = Spanned::new(
+                        RawExpr::Postfix {
+                            op: PostfixOp::PlusPlus,
+                            expr: Box::new(expr),
+                        },
+                        span,
+                    );
                 }
                 Some(Token::MinusMinus) => {
                     let end = self.current_span().end;
                     self.advance();
                     let span = expr.span.start..end;
-                    expr = Spanned::new(RawExpr::Postfix { op: PostfixOp::MinusMinus, expr: Box::new(expr) }, span);
+                    expr = Spanned::new(
+                        RawExpr::Postfix {
+                            op: PostfixOp::MinusMinus,
+                            expr: Box::new(expr),
+                        },
+                        span,
+                    );
                 }
                 _ => break,
             }
@@ -408,27 +485,51 @@ impl Parser {
                     let mut args = Vec::new();
                     while self.peek() != Some(&Token::RParen) && !self.is_at_end() {
                         args.push(self.parse_assign()?);
-                        if !self.eat(&Token::Comma) { break; }
+                        if !self.eat(&Token::Comma) {
+                            break;
+                        }
                     }
                     let end = self.current_span().end;
                     self.expect(&Token::RParen, "expected `)` after arguments");
                     let span = expr.span.start..end;
-                    expr = Spanned::new(RawExpr::Call { callee: Box::new(expr), args }, span);
+                    expr = Spanned::new(
+                        RawExpr::Call {
+                            callee: Box::new(expr),
+                            args,
+                        },
+                        span,
+                    );
                 }
                 Some(Token::Dot) => {
                     self.advance();
                     let prop = self.expect_ident("expected property name after `.`")?;
-                    let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(0);
+                    let end = self
+                        .tokens
+                        .get(self.pos.saturating_sub(1))
+                        .map(|t| t.span.end)
+                        .unwrap_or(0);
                     let span = expr.span.start..end;
-                    expr = Spanned::new(RawExpr::Member { object: Box::new(expr), property: prop }, span);
+                    expr = Spanned::new(
+                        RawExpr::Member {
+                            object: Box::new(expr),
+                            property: prop,
+                        },
+                        span,
+                    );
                 }
                 Some(Token::LBracket) => {
                     self.advance();
                     let index = self.parse_assign()?;
-                    let end   = self.current_span().end;
+                    let end = self.current_span().end;
                     self.expect(&Token::RBracket, "expected `]`");
                     let span = expr.span.start..end;
-                    expr = Spanned::new(RawExpr::Index { object: Box::new(expr), index: Box::new(index) }, span);
+                    expr = Spanned::new(
+                        RawExpr::Index {
+                            object: Box::new(expr),
+                            index: Box::new(index),
+                        },
+                        span,
+                    );
                 }
                 _ => break,
             }
@@ -449,9 +550,18 @@ impl Parser {
                 self.advance();
                 Ok(Spanned::new(RawExpr::StringLit(s), span))
             }
-            Some(Token::True)  => { self.advance(); Ok(Spanned::new(RawExpr::Bool(true),  span)) }
-            Some(Token::False) => { self.advance(); Ok(Spanned::new(RawExpr::Bool(false), span)) }
-            Some(Token::Null)  => { self.advance(); Ok(Spanned::new(RawExpr::Null,        span)) }
+            Some(Token::True) => {
+                self.advance();
+                Ok(Spanned::new(RawExpr::Bool(true), span))
+            }
+            Some(Token::False) => {
+                self.advance();
+                Ok(Spanned::new(RawExpr::Bool(false), span))
+            }
+            Some(Token::Null) => {
+                self.advance();
+                Ok(Spanned::new(RawExpr::Null, span))
+            }
 
             Some(Token::Ident(_)) => self.parse_ident_or_arrow(),
 
@@ -462,7 +572,9 @@ impl Parser {
                 let mut items = Vec::new();
                 while self.peek() != Some(&Token::RBracket) && !self.is_at_end() {
                     items.push(self.parse_assign()?);
-                    if !self.eat(&Token::Comma) { break; }
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
                 }
                 let end = self.current_span().end;
                 self.expect(&Token::RBracket, "expected `]`");
@@ -474,17 +586,27 @@ impl Parser {
                 let mut pairs = Vec::new();
                 while self.peek() != Some(&Token::RBrace) && !self.is_at_end() {
                     let key = match self.peek().cloned() {
-                        Some(Token::Ident(name)) => { self.advance(); name }
-                        Some(Token::StringDouble(s) | Token::StringSingle(s)) => { self.advance(); s }
-                        _ => return Err(ParseError {
-                            message: "expected object key".to_string(),
-                            span:    self.current_span(),
-                        }),
+                        Some(Token::Ident(name)) => {
+                            self.advance();
+                            name
+                        }
+                        Some(Token::StringDouble(s) | Token::StringSingle(s)) => {
+                            self.advance();
+                            s
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: "expected object key".to_string(),
+                                span: self.current_span(),
+                            });
+                        }
                     };
                     self.expect(&Token::Colon, "expected `:` after object key");
                     let value = self.parse_assign()?;
                     pairs.push((key, value));
-                    if !self.eat(&Token::Comma) { break; }
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
                 }
                 let end = self.current_span().end;
                 self.expect(&Token::RBrace, "expected `}`");
@@ -506,14 +628,24 @@ impl Parser {
 
     // Single bare ident, could be the start of an arrow: `x => ...`
     fn parse_ident_or_arrow(&mut self) -> Result<Expr, ParseError> {
-        let span  = self.current_span();
-        let name  = self.expect_ident("expected identifier")?;
+        let span = self.current_span();
+        let name = self.expect_ident("expected identifier")?;
 
         if self.peek() == Some(&Token::Arrow) {
             self.advance(); // eat =>
             let body = self.parse_arrow_body()?;
-            let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(span.end);
-            return Ok(Spanned::new(RawExpr::Arrow { params: vec![name], body }, span.start..end));
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|t| t.span.end)
+                .unwrap_or(span.end);
+            return Ok(Spanned::new(
+                RawExpr::Arrow {
+                    params: vec![name],
+                    body,
+                },
+                span.start..end,
+            ));
         }
 
         Ok(Spanned::new(RawExpr::Ident(name), span))
@@ -537,7 +669,7 @@ impl Parser {
             }
         } else {
             // Speculatively try to collect `ident, ident, ...`
-            let saved_pos    = self.pos;
+            let saved_pos = self.pos;
             let saved_errors = self.errors.len();
             let mut all_idents = true;
 
@@ -552,13 +684,14 @@ impl Parser {
                             break;
                         }
                     }
-                    _ => { all_idents = false; break; }
+                    _ => {
+                        all_idents = false;
+                        break;
+                    }
                 }
             }
 
-            if all_idents
-                && self.peek() == Some(&Token::RParen)
-            {
+            if all_idents && self.peek() == Some(&Token::RParen) {
                 self.advance(); // eat `)`
                 if self.peek() == Some(&Token::Arrow) {
                     self.advance(); // eat `=>`
@@ -577,13 +710,23 @@ impl Parser {
 
         if is_arrow {
             let body = self.parse_arrow_body()?;
-            let end  = self.tokens.get(self.pos.saturating_sub(1)).map(|t| t.span.end).unwrap_or(0);
-            return Ok(Spanned::new(RawExpr::Arrow { params: names, body }, start..end));
+            let end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|t| t.span.end)
+                .unwrap_or(0);
+            return Ok(Spanned::new(
+                RawExpr::Arrow {
+                    params: names,
+                    body,
+                },
+                start..end,
+            ));
         }
 
         // Plain grouped expression
         let inner = self.parse_assign()?;
-        let end   = self.current_span().end;
+        let end = self.current_span().end;
         self.expect(&Token::RParen, "expected `)`");
         Ok(Spanned::new(inner.node, start..end))
     }
@@ -598,21 +741,21 @@ impl Parser {
 
     fn peek_binop(&self) -> Option<BinOp> {
         match self.peek()? {
-            Token::Plus     => Some(BinOp::Add),
-            Token::Minus    => Some(BinOp::Sub),
-            Token::Star     => Some(BinOp::Mul),
-            Token::Slash    => Some(BinOp::Div),
-            Token::Percent  => Some(BinOp::Mod),
-            Token::StrictEq  => Some(BinOp::StrictEq),
+            Token::Plus => Some(BinOp::Add),
+            Token::Minus => Some(BinOp::Sub),
+            Token::Star => Some(BinOp::Mul),
+            Token::Slash => Some(BinOp::Div),
+            Token::Percent => Some(BinOp::Mod),
+            Token::StrictEq => Some(BinOp::StrictEq),
             Token::StrictNeq => Some(BinOp::StrictNeq),
-            Token::Eq       => Some(BinOp::Eq),
-            Token::Neq      => Some(BinOp::Neq),
-            Token::Lt       => Some(BinOp::Lt),
-            Token::Lte      => Some(BinOp::Lte),
-            Token::Gt       => Some(BinOp::Gt),
-            Token::Gte      => Some(BinOp::Gte),
-            Token::And      => Some(BinOp::And),
-            Token::Or       => Some(BinOp::Or),
+            Token::Eq => Some(BinOp::Eq),
+            Token::Neq => Some(BinOp::Neq),
+            Token::Lt => Some(BinOp::Lt),
+            Token::Lte => Some(BinOp::Lte),
+            Token::Gt => Some(BinOp::Gt),
+            Token::Gte => Some(BinOp::Gte),
+            Token::And => Some(BinOp::And),
+            Token::Or => Some(BinOp::Or),
             _ => None,
         }
     }
@@ -621,13 +764,11 @@ impl Parser {
 // Binding powers, higher = tighter binding
 fn infix_binding_power(op: &BinOp) -> (u8, u8) {
     match op {
-        BinOp::Or                              => (1, 2),
-        BinOp::And                             => (3, 4),
-        BinOp::Eq | BinOp::Neq
-        | BinOp::StrictEq | BinOp::StrictNeq  => (5, 6),
-        BinOp::Lt | BinOp::Lte
-        | BinOp::Gt | BinOp::Gte              => (7, 8),
-        BinOp::Add | BinOp::Sub               => (9, 10),
-        BinOp::Mul | BinOp::Div | BinOp::Mod  => (11, 12),
+        BinOp::Or => (1, 2),
+        BinOp::And => (3, 4),
+        BinOp::Eq | BinOp::Neq | BinOp::StrictEq | BinOp::StrictNeq => (5, 6),
+        BinOp::Lt | BinOp::Lte | BinOp::Gt | BinOp::Gte => (7, 8),
+        BinOp::Add | BinOp::Sub => (9, 10),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (11, 12),
     }
 }

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use axum::extract::{Query, Request};
 use axum::http::HeaderMap;
@@ -324,17 +327,24 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         });
 
         let query_conn = conn.clone();
-        let query = Value::Function(Function { 
+        let query = Value::Function(Function {
             params: vec!["sql".to_string()],
             body: FunctionBody::Native(Arc::new(move |args| {
                 let conn = query_conn.clone();
                 Box::pin(async move {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
-                        Some(other) => return Ok(Value::String(format!(
-                            "DB.Query: expected a SQL string, got {}", other.type_name()
-                        ))),
-                        None => return Ok(Value::String("DB.Query: expected a SQL string".to_string())),
+                        Some(other) => {
+                            return Ok(Value::String(format!(
+                                "DB.Query: expected a SQL string, got {}",
+                                other.type_name()
+                            )));
+                        }
+                        None => {
+                            return Ok(Value::String(
+                                "DB.Query: expected a SQL string".to_string(),
+                            ));
+                        }
                     };
                     Ok(query_stmt_to_value(conn.query(&sql)))
                 })
@@ -350,10 +360,15 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                 Box::pin(async move {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
-                        Some(other) => return Ok(Value::String(format!(
-                            "DB.Exec: expected a SQL string, got {}", other.type_name()
-                        ))),
-                        None => return Ok(Value::String("DB.Exec: expected a SQL string".to_string())),
+                        Some(other) => {
+                            return Ok(Value::String(format!(
+                                "DB.Exec: expected a SQL string, got {}",
+                                other.type_name()
+                            )));
+                        }
+                        None => {
+                            return Ok(Value::String("DB.Exec: expected a SQL string".to_string()));
+                        }
                     };
                     Ok(exec_stmt_to_value(conn.exec(&sql)))
                 })
@@ -369,10 +384,17 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                 Box::pin(async move {
                     let name = match args.first() {
                         Some(Value::String(s)) => s.clone(),
-                        Some(other) => return Ok(Value::String(format!(
-                            "DB.Table: expected a table name, got {}", other.type_name()
-                        ))),
-                        None => return Ok(Value::String("DB.Table: expected a table name".to_string())),
+                        Some(other) => {
+                            return Ok(Value::String(format!(
+                                "DB.Table: expected a table name, got {}",
+                                other.type_name()
+                            )));
+                        }
+                        None => {
+                            return Ok(Value::String(
+                                "DB.Table: expected a table name".to_string(),
+                            ));
+                        }
                     };
                     Ok(table_stmt_to_value(conn.table(&name)))
                 })
@@ -383,9 +405,9 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         let db = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
             map.insert("Ping".to_string(), ping);
-            map.insert("Query".to_string(), query); 
-            map.insert("Exec".to_string(), exec); 
-            map.insert("Table".to_string(), table); 
+            map.insert("Query".to_string(), query);
+            map.insert("Exec".to_string(), exec);
+            map.insert("Table".to_string(), table);
             map
         })));
 
@@ -485,9 +507,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         params: vec![],
         body: FunctionBody::Native(Arc::new(move |_args| {
             let stmt = count_stmt.clone();
-            Box::pin(async move {
-                Ok(Value::Number(stmt.count().await as f64))
-            })
+            Box::pin(async move { Ok(Value::Number(stmt.count().await as f64)) })
         })),
         captured: Env::new_root(),
     });
@@ -517,9 +537,11 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
             Box::pin(async move {
                 let obj = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
-                    None => return Ok(Value::String(
-                        "TableStmt.Insert: expected an object".to_string()
-                    )),
+                    None => {
+                        return Ok(Value::String(
+                            "TableStmt.Insert: expected an object".to_string(),
+                        ));
+                    }
                 };
                 Ok(exec_stmt_to_value(stmt.insert(&obj)))
             })
@@ -535,9 +557,11 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
             Box::pin(async move {
                 let obj = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
-                    None => return Ok(Value::String(
-                        "TableStmt.Update: expected an object".to_string()
-                    )),
+                    None => {
+                        return Ok(Value::String(
+                            "TableStmt.Update: expected an object".to_string(),
+                        ));
+                    }
                 };
                 Ok(exec_stmt_to_value(stmt.update(&obj)))
             })
@@ -553,9 +577,11 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
             Box::pin(async move {
                 let conditions = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
-                    None => return Ok(Value::String(
-                        "TableStmt.Where: expected an object".to_string()
-                    )),
+                    None => {
+                        return Ok(Value::String(
+                            "TableStmt.Where: expected an object".to_string(),
+                        ));
+                    }
                 };
                 Ok(table_stmt_to_value(stmt.where_(&conditions)))
             })
@@ -568,9 +594,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         params: vec![],
         body: FunctionBody::Native(Arc::new(move |_args| {
             let stmt = delete_stmt.clone();
-            Box::pin(async move {
-                Ok(exec_stmt_to_value(stmt.delete()))
-            })
+            Box::pin(async move { Ok(exec_stmt_to_value(stmt.delete())) })
         })),
         captured: Env::new_root(),
     });
@@ -591,7 +615,11 @@ fn value_to_object(v: &Value) -> Option<serde_json::Map<String, serde_json::Valu
     match v {
         Value::Object(o) => {
             let lock = o.lock().unwrap();
-            Some(lock.iter().map(|(k, val)| (k.clone(), value_to_json(val))).collect())
+            Some(
+                lock.iter()
+                    .map(|(k, val)| (k.clone(), value_to_json(val)))
+                    .collect(),
+            )
         }
         _ => None,
     }

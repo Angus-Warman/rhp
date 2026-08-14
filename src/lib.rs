@@ -1,14 +1,21 @@
-use std::{path::{Path, PathBuf}};
+use std::path::{Path, PathBuf};
 
+use anyhow::Result;
 use axum::{
-    Router, extract::{Request, State}, http::StatusCode, response::{Html, IntoResponse, Response}, routing::any, debug_handler,
+    Router, debug_handler,
+    extract::{Request, State},
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    routing::any,
 };
 use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-use anyhow::Result;
 
-use crate::{db::{DbConn, connect}, process::{Context, process_src}};
+use crate::{
+    db::{DbConn, connect},
+    process::{Context, process_src},
+};
 
 mod ast;
 mod db;
@@ -45,7 +52,9 @@ fn build_router(folder: PathBuf, conn: DbConn) -> Router {
 
 #[debug_handler]
 async fn rhp_handler(State(state): State<AppState>, request: Request) -> Response {
-    let path = state.folder.join(request.uri().path().trim_start_matches('/'));
+    let path = state
+        .folder
+        .join(request.uri().path().trim_start_matches('/'));
 
     if Path::new(&path).extension().is_some_and(|ext| ext == "rhp") {
         process_rhp(path, request, state.conn).await.into_response()
@@ -68,7 +77,7 @@ async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response 
             };
             let html = process_src(src, context, conn).await;
             Html(html).into_response()
-        },
+        }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }

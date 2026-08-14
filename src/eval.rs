@@ -1,24 +1,31 @@
+use crate::ast::*;
+use async_recursion::async_recursion;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use async_recursion::async_recursion;
-use crate::ast::*;
 
 use crate::value::*;
 #[derive(Debug, Clone)]
 pub struct EvalError {
     pub message: String,
-    pub span:    std::ops::Range<usize>,
+    pub span: std::ops::Range<usize>,
 }
 
 impl EvalError {
     fn new(message: impl Into<String>, span: std::ops::Range<usize>) -> Self {
-        Self { message: message.into(), span }
+        Self {
+            message: message.into(),
+            span,
+        }
     }
 }
 
 impl std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}..{}: {:?}", self.span.start, self.span.end, self.message)
+        write!(
+            f,
+            "{}..{}: {:?}",
+            self.span.start, self.span.end, self.message
+        )
     }
 }
 
@@ -34,11 +41,13 @@ enum Signal {
 }
 
 impl From<EvalError> for Signal {
-    fn from(e: EvalError) -> Self { Signal::Error(e) }
+    fn from(e: EvalError) -> Self {
+        Signal::Error(e)
+    }
 }
 
-type EvalResult  = Result<Value, Signal>;
-type StmtResult  = Result<(), Signal>;
+type EvalResult = Result<Value, Signal>;
+type StmtResult = Result<(), Signal>;
 
 // ---- Evaluator ----
 
@@ -48,14 +57,16 @@ pub struct Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        Self { output: String::new() }
+        Self {
+            output: String::new(),
+        }
     }
 
     // Entry point: evaluate a list of statements in a given environment
     pub async fn eval_stmts(
         &mut self,
         stmts: &[Stmt],
-        env:   Arc<Mutex<Env>>,
+        env: Arc<Mutex<Env>>,
     ) -> Result<(), EvalError> {
         for stmt in stmts {
             if let Err(signal) = self.eval_stmt(stmt, env.clone()).await {
@@ -64,13 +75,13 @@ impl Evaluator {
                     Signal::Return(value) => {
                         self.output += &value.display();
                         return Ok(());
-                    },
-                    Signal::Break => return Err(EvalError::new(
-                        "break outside loop", stmt.span.clone()
-                    )),
-                    Signal::Continue => return Err(EvalError::new(
-                        "continue outside loop", stmt.span.clone()
-                    )),
+                    }
+                    Signal::Break => {
+                        return Err(EvalError::new("break outside loop", stmt.span.clone()));
+                    }
+                    Signal::Continue => {
+                        return Err(EvalError::new("continue outside loop", stmt.span.clone()));
+                    }
                 }
             }
         }
@@ -84,10 +95,14 @@ impl Evaluator {
         match &stmt.node {
             RawStmt::Error => Ok(()), // already reported at parse time
 
-            RawStmt::VarDecl { kind: _, name, init } => {
+            RawStmt::VarDecl {
+                kind: _,
+                name,
+                init,
+            } => {
                 let value = match init {
                     Some(expr) => self.eval_expr(expr, env.clone()).await?,
-                    None       => Value::Null,
+                    None => Value::Null,
                 };
                 env.lock().unwrap().define(name, value);
                 Ok(())
@@ -95,15 +110,19 @@ impl Evaluator {
 
             RawStmt::FunctionDecl { name, params, body } => {
                 let func = Value::Function(Function {
-                    params:   params.clone(),
-                    body:     FunctionBody::Block(body.clone()),
+                    params: params.clone(),
+                    body: FunctionBody::Block(body.clone()),
                     captured: env.clone(),
                 });
                 env.lock().unwrap().define(name, func);
                 Ok(())
             }
 
-            RawStmt::If { cond, then, otherwise } => {
+            RawStmt::If {
+                cond,
+                then,
+                otherwise,
+            } => {
                 let val = self.eval_expr(cond, env.clone()).await?;
                 if val.is_truthy() {
                     let child = Env::new_child(env.clone());
@@ -118,19 +137,26 @@ impl Evaluator {
             RawStmt::While { cond, body } => {
                 loop {
                     let val = self.eval_expr(cond, env.clone()).await?;
-                    if !val.is_truthy() { break; }
+                    if !val.is_truthy() {
+                        break;
+                    }
                     let child = Env::new_child(env.clone());
                     match self.eval_block(body, child).await {
-                        Ok(())                  => {}
-                        Err(Signal::Break)      => break,
-                        Err(Signal::Continue)   => continue,
-                        Err(e)                  => return Err(e),
+                        Ok(()) => {}
+                        Err(Signal::Break) => break,
+                        Err(Signal::Continue) => continue,
+                        Err(e) => return Err(e),
                     }
                 }
                 Ok(())
             }
 
-            RawStmt::For { init, cond, update, body } => {
+            RawStmt::For {
+                init,
+                cond,
+                update,
+                body,
+            } => {
                 let loop_env = Env::new_child(env.clone());
 
                 if let Some(init_stmt) = init {
@@ -140,15 +166,17 @@ impl Evaluator {
                 loop {
                     if let Some(cond_expr) = cond {
                         let val = self.eval_expr(cond_expr, loop_env.clone()).await?;
-                        if !val.is_truthy() { break; }
+                        if !val.is_truthy() {
+                            break;
+                        }
                     }
 
                     let iter_env = Env::new_child(loop_env.clone());
                     match self.eval_block(body, iter_env).await {
-                        Ok(())                => {}
-                        Err(Signal::Break)    => break,
+                        Ok(()) => {}
+                        Err(Signal::Break) => break,
                         Err(Signal::Continue) => {}
-                        Err(e)               => return Err(e),
+                        Err(e) => return Err(e),
                     }
 
                     if let Some(update_expr) = update {
@@ -161,12 +189,12 @@ impl Evaluator {
             RawStmt::Return(expr) => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e, env).await?,
-                    None    => Value::Null,
+                    None => Value::Null,
                 };
                 Err(Signal::Return(value))
             }
 
-            RawStmt::Break    => Err(Signal::Break),
+            RawStmt::Break => Err(Signal::Break),
             RawStmt::Continue => Err(Signal::Continue),
 
             RawStmt::Expr(expr) => {
@@ -178,11 +206,10 @@ impl Evaluator {
 
                 if value.is_truthy() {
                     Ok(())
-                }
-                else {
+                } else {
                     Err(Signal::Return(value))
                 }
-            },
+            }
         }
     }
 
@@ -199,17 +226,19 @@ impl Evaluator {
     #[async_recursion]
     async fn eval_expr(&mut self, expr: &Expr, env: Arc<Mutex<Env>>) -> EvalResult {
         match &expr.node {
-            RawExpr::Null        => Ok(Value::Null),
-            RawExpr::Bool(b)     => Ok(Value::Bool(*b)),
-            RawExpr::Number(n)   => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
-            RawExpr::StringLit(s) => Ok(Value::String(s.trim_matches(|c| c == '"' || c == '\'').to_string())),
+            RawExpr::Null => Ok(Value::Null),
+            RawExpr::Bool(b) => Ok(Value::Bool(*b)),
+            RawExpr::Number(n) => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
+            RawExpr::StringLit(s) => Ok(Value::String(
+                s.trim_matches(|c| c == '"' || c == '\'').to_string(),
+            )),
 
-            RawExpr::Ident(name) => {
-                env.lock().unwrap().get(name).ok_or_else(|| Signal::Error(EvalError::new(
+            RawExpr::Ident(name) => env.lock().unwrap().get(name).ok_or_else(|| {
+                Signal::Error(EvalError::new(
                     format!("undefined variable `{}`", name),
                     expr.span.clone(),
-                )))
-            }
+                ))
+            }),
 
             RawExpr::Array(items) => {
                 let mut vals = Vec::new();
@@ -244,7 +273,11 @@ impl Evaluator {
                 self.eval_assign(op, target, value, env, &expr.span).await
             }
 
-            RawExpr::Ternary { cond, then, otherwise } => {
+            RawExpr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
                 let c = self.eval_expr(cond, env.clone()).await?;
                 if c.is_truthy() {
                     self.eval_expr(then, env).await
@@ -264,16 +297,14 @@ impl Evaluator {
                 self.eval_index(&obj, &idx, &expr.span)
             }
 
-            RawExpr::Call { callee, args } => {
-                self.eval_call(callee, args, env, &expr.span).await
-            }
+            RawExpr::Call { callee, args } => self.eval_call(callee, args, env, &expr.span).await,
 
             RawExpr::Arrow { params, body } => {
                 let func = Function {
-                    params:   params.clone(),
-                    body:     match body {
+                    params: params.clone(),
+                    body: match body {
                         ArrowBody::Block(stmts) => FunctionBody::Block(stmts.clone()),
-                        ArrowBody::Expr(e)      => FunctionBody::Expr(e.clone()),
+                        ArrowBody::Expr(e) => FunctionBody::Expr(e.clone()),
                     },
                     captured: env, // capture current scope
                 };
@@ -283,14 +314,13 @@ impl Evaluator {
             RawExpr::HtmlBlock(stmts) => {
                 // Evaluate stmts; any output they push goes to self.output
                 let child = Env::new_child(env);
-                self.eval_block(stmts, child).await
-                    .map_err(|s| match s {
-                        Signal::Error(e) => Signal::Error(e),
-                        other => Signal::Error(EvalError::new(
-                            format!("unexpected signal in html block: {:?}", other),
-                            expr.span.clone(),
-                        )),
-                    })?;
+                self.eval_block(stmts, child).await.map_err(|s| match s {
+                    Signal::Error(e) => Signal::Error(e),
+                    other => Signal::Error(EvalError::new(
+                        format!("unexpected signal in html block: {:?}", other),
+                        expr.span.clone(),
+                    )),
+                })?;
                 Ok(Value::Null)
             }
         }
@@ -301,9 +331,9 @@ impl Evaluator {
     #[async_recursion]
     async fn eval_prefix(
         &mut self,
-        op:   &PrefixOp,
+        op: &PrefixOp,
         expr: &Expr,
-        env:  Arc<Mutex<Env>>,
+        env: Arc<Mutex<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
         match op {
@@ -316,12 +346,17 @@ impl Evaluator {
                 match v {
                     Value::Number(n) => Ok(Value::Number(-n)),
                     other => Err(Signal::Error(EvalError::new(
-                        format!("cannot negate {}", other.type_name()), span.clone()
+                        format!("cannot negate {}", other.type_name()),
+                        span.clone(),
                     ))),
                 }
             }
             PrefixOp::PlusPlus | PrefixOp::MinusMinus => {
-                let delta: f64 = if matches!(op, PrefixOp::PlusPlus) { 1.0 } else { -1.0 };
+                let delta: f64 = if matches!(op, PrefixOp::PlusPlus) {
+                    1.0
+                } else {
+                    -1.0
+                };
                 let new_val = self.numeric_mutate(expr, delta, env, span).await?;
                 Ok(new_val) // prefix: return new value
             }
@@ -331,12 +366,16 @@ impl Evaluator {
     #[async_recursion]
     async fn eval_postfix(
         &mut self,
-        op:   &PostfixOp,
+        op: &PostfixOp,
         expr: &Expr,
-        env:  Arc<Mutex<Env>>,
+        env: Arc<Mutex<Env>>,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
-        let delta: f64 = if matches!(op, PostfixOp::PlusPlus) { 1.0 } else { -1.0 };
+        let delta: f64 = if matches!(op, PostfixOp::PlusPlus) {
+            1.0
+        } else {
+            -1.0
+        };
         let old_val = self.eval_expr(expr, env.clone()).await?;
         self.numeric_mutate(expr, delta, env, span).await?;
         Ok(old_val) // postfix: return old value
@@ -347,19 +386,23 @@ impl Evaluator {
     async fn numeric_mutate(
         &mut self,
         target: &Expr,
-        delta:  f64,
-        env:    Arc<Mutex<Env>>,
-        span:   &std::ops::Range<usize>,
+        delta: f64,
+        env: Arc<Mutex<Env>>,
+        span: &std::ops::Range<usize>,
     ) -> Result<Value, Signal> {
         let current = self.eval_expr(target, env.clone()).await?;
         let n = match current {
             Value::Number(n) => n,
-            other => return Err(Signal::Error(EvalError::new(
-                format!("++ / -- requires a number, got {}", other.type_name()), span.clone()
-            ))),
+            other => {
+                return Err(Signal::Error(EvalError::new(
+                    format!("++ / -- requires a number, got {}", other.type_name()),
+                    span.clone(),
+                )));
+            }
         };
         let new_val = Value::Number(n + delta);
-        self.write_target(target, new_val.clone(), env, span).await?;
+        self.write_target(target, new_val.clone(), env, span)
+            .await?;
         Ok(new_val)
     }
 
@@ -368,26 +411,34 @@ impl Evaluator {
     #[async_recursion]
     async fn eval_binary(
         &mut self,
-        op:    &BinOp,
-        left:  &Expr,
+        op: &BinOp,
+        left: &Expr,
         right: &Expr,
-        env:   Arc<Mutex<Env>>,
-        span:  &std::ops::Range<usize>,
+        env: Arc<Mutex<Env>>,
+        span: &std::ops::Range<usize>,
     ) -> EvalResult {
         // Short-circuit for && and ||
         match op {
             BinOp::And => {
                 let l = self.eval_expr(left, env.clone()).await?;
-                return if !l.is_truthy() { Ok(l) } else { self.eval_expr(right, env).await };
+                return if !l.is_truthy() {
+                    Ok(l)
+                } else {
+                    self.eval_expr(right, env).await
+                };
             }
             BinOp::Or => {
                 let l = self.eval_expr(left, env.clone()).await?;
-                return if l.is_truthy() { Ok(l) } else { self.eval_expr(right, env).await };
+                return if l.is_truthy() {
+                    Ok(l)
+                } else {
+                    self.eval_expr(right, env).await
+                };
             }
             _ => {}
         }
 
-        let l = self.eval_expr(left,  env.clone()).await?;
+        let l = self.eval_expr(left, env.clone()).await?;
         let r = self.eval_expr(right, env).await?;
 
         match op {
@@ -401,14 +452,14 @@ impl Evaluator {
             BinOp::Div => numeric_op(l, r, |a, b| a / b, span),
             BinOp::Mod => numeric_op(l, r, |a, b| a % b, span),
 
-            BinOp::Eq       => Ok(Value::Bool(loose_eq(&l, &r))),
-            BinOp::Neq      => Ok(Value::Bool(!loose_eq(&l, &r))),
-            BinOp::StrictEq  => Ok(Value::Bool(l == r)),
+            BinOp::Eq => Ok(Value::Bool(loose_eq(&l, &r))),
+            BinOp::Neq => Ok(Value::Bool(!loose_eq(&l, &r))),
+            BinOp::StrictEq => Ok(Value::Bool(l == r)),
             BinOp::StrictNeq => Ok(Value::Bool(l != r)),
 
-            BinOp::Lt  => compare(l, r, |a, b| a <  b, span),
+            BinOp::Lt => compare(l, r, |a, b| a < b, span),
             BinOp::Lte => compare(l, r, |a, b| a <= b, span),
-            BinOp::Gt  => compare(l, r, |a, b| a >  b, span),
+            BinOp::Gt => compare(l, r, |a, b| a > b, span),
             BinOp::Gte => compare(l, r, |a, b| a >= b, span),
 
             BinOp::And | BinOp::Or => unreachable!(),
@@ -420,11 +471,11 @@ impl Evaluator {
     #[async_recursion]
     async fn eval_assign(
         &mut self,
-        op:     &AssignOp,
+        op: &AssignOp,
         target: &Expr,
-        value:  &Expr,
-        env:    Arc<Mutex<Env>>,
-        span:   &std::ops::Range<usize>,
+        value: &Expr,
+        env: Arc<Mutex<Env>>,
+        span: &std::ops::Range<usize>,
     ) -> EvalResult {
         let rhs = self.eval_expr(value, env.clone()).await?;
 
@@ -434,17 +485,23 @@ impl Evaluator {
             let current = self.eval_expr(target, env.clone()).await?;
             match (op, &current, &rhs) {
                 (AssignOp::Add, Value::Number(a), Value::Number(b)) => Value::Number(a + b),
-                (AssignOp::Add, _, _) => Value::String(format!("{}{}", current.display(), rhs.display())),
+                (AssignOp::Add, _, _) => {
+                    Value::String(format!("{}{}", current.display(), rhs.display()))
+                }
                 (AssignOp::Sub, Value::Number(a), Value::Number(b)) => Value::Number(a - b),
                 (AssignOp::Mul, Value::Number(a), Value::Number(b)) => Value::Number(a * b),
                 (AssignOp::Div, Value::Number(a), Value::Number(b)) => Value::Number(a / b),
-                _ => return Err(Signal::Error(EvalError::new(
-                    "invalid operand types for compound assignment", span.clone()
-                ))),
+                _ => {
+                    return Err(Signal::Error(EvalError::new(
+                        "invalid operand types for compound assignment",
+                        span.clone(),
+                    )));
+                }
             }
         };
 
-        self.write_target(target, final_val.clone(), env, span).await?;
+        self.write_target(target, final_val.clone(), env, span)
+            .await?;
         Ok(final_val)
     }
 
@@ -452,10 +509,10 @@ impl Evaluator {
     #[async_recursion]
     async fn write_target(
         &mut self,
-        target:    &Expr,
-        value:     Value,
-        env:       Arc<Mutex<Env>>,
-        span:      &std::ops::Range<usize>,
+        target: &Expr,
+        value: Value,
+        env: Arc<Mutex<Env>>,
+        span: &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
         match &target.node {
             RawExpr::Ident(name) => {
@@ -470,7 +527,8 @@ impl Evaluator {
                         Ok(())
                     }
                     other => Err(Signal::Error(EvalError::new(
-                        format!("cannot set property on {}", other.type_name()), span.clone()
+                        format!("cannot set property on {}", other.type_name()),
+                        span.clone(),
                     ))),
                 }
             }
@@ -486,7 +544,8 @@ impl Evaluator {
                             Ok(())
                         } else {
                             Err(Signal::Error(EvalError::new(
-                                format!("array index {} out of bounds", i), span.clone()
+                                format!("array index {} out of bounds", i),
+                                span.clone(),
                             )))
                         }
                     }
@@ -495,12 +554,14 @@ impl Evaluator {
                         Ok(())
                     }
                     _ => Err(Signal::Error(EvalError::new(
-                        "invalid assignment target", span.clone()
+                        "invalid assignment target",
+                        span.clone(),
                     ))),
                 }
             }
             _ => Err(Signal::Error(EvalError::new(
-                "invalid assignment target", span.clone()
+                "invalid assignment target",
+                span.clone(),
             ))),
         }
     }
@@ -509,52 +570,53 @@ impl Evaluator {
 
     fn eval_member(
         &self,
-        obj:      &Value,
+        obj: &Value,
         property: &str,
-        span:     &std::ops::Range<usize>,
+        span: &std::ops::Range<usize>,
     ) -> EvalResult {
         match obj {
-            Value::Object(map) => {
-                Ok(map.lock().unwrap().get(property).cloned().unwrap_or(Value::Null))
-            }
-            Value::Array(arr) => {
-                match property {
-                    "length" => Ok(Value::Number(arr.lock().unwrap().len() as f64)),
-                    other => Err(Signal::Error(EvalError::new(
-                        format!("array has no property `{}`", other), span.clone()
-                    ))),
-                }
-            }
-            Value::String(s) => {
-                match property {
-                    "length" => Ok(Value::Number(s.len() as f64)),
-                    other => Err(Signal::Error(EvalError::new(
-                        format!("string has no property `{}`", other), span.clone()
-                    ))),
-                }
-            }
+            Value::Object(map) => Ok(map
+                .lock()
+                .unwrap()
+                .get(property)
+                .cloned()
+                .unwrap_or(Value::Null)),
+            Value::Array(arr) => match property {
+                "length" => Ok(Value::Number(arr.lock().unwrap().len() as f64)),
+                other => Err(Signal::Error(EvalError::new(
+                    format!("array has no property `{}`", other),
+                    span.clone(),
+                ))),
+            },
+            Value::String(s) => match property {
+                "length" => Ok(Value::Number(s.len() as f64)),
+                other => Err(Signal::Error(EvalError::new(
+                    format!("string has no property `{}`", other),
+                    span.clone(),
+                ))),
+            },
             other => Err(Signal::Error(EvalError::new(
-                format!("cannot access property on {}", other.type_name()), span.clone()
+                format!("cannot access property on {}", other.type_name()),
+                span.clone(),
             ))),
         }
     }
 
-    fn eval_index(
-        &self,
-        obj:  &Value,
-        idx:  &Value,
-        span: &std::ops::Range<usize>,
-    ) -> EvalResult {
+    fn eval_index(&self, obj: &Value, idx: &Value, span: &std::ops::Range<usize>) -> EvalResult {
         match (obj, idx) {
             (Value::Array(arr), Value::Number(n)) => {
                 let i = *n as usize;
                 Ok(arr.lock().unwrap().get(i).cloned().unwrap_or(Value::Null))
             }
-            (Value::Object(map), Value::String(key)) => {
-                Ok(map.lock().unwrap().get(key.as_str()).cloned().unwrap_or(Value::Null))
-            }
+            (Value::Object(map), Value::String(key)) => Ok(map
+                .lock()
+                .unwrap()
+                .get(key.as_str())
+                .cloned()
+                .unwrap_or(Value::Null)),
             _ => Err(Signal::Error(EvalError::new(
-                format!("cannot index {} with {}", obj.type_name(), idx.type_name()), span.clone()
+                format!("cannot index {} with {}", obj.type_name(), idx.type_name()),
+                span.clone(),
             ))),
         }
     }
@@ -565,9 +627,9 @@ impl Evaluator {
     async fn eval_call(
         &mut self,
         callee: &Expr,
-        args:   &[Expr],
-        env:    Arc<Mutex<Env>>,
-        span:   &std::ops::Range<usize>,
+        args: &[Expr],
+        env: Arc<Mutex<Env>>,
+        span: &std::ops::Range<usize>,
     ) -> EvalResult {
         let callee_val = self.eval_expr(callee, env.clone()).await?;
 
@@ -579,7 +641,8 @@ impl Evaluator {
         match callee_val {
             Value::Function(func) => self.call_function(func, arg_vals, span).await,
             other => Err(Signal::Error(EvalError::new(
-                format!("cannot call {}", other.type_name()), span.clone()
+                format!("cannot call {}", other.type_name()),
+                span.clone(),
             ))),
         }
     }
@@ -592,9 +655,7 @@ impl Evaluator {
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
         match &func.body {
-            FunctionBody::Native(f) => {
-                f(args).await.map_err(Signal::Error)
-            }
+            FunctionBody::Native(f) => f(args).await.map_err(Signal::Error),
 
             FunctionBody::Block(stmts) => {
                 // New scope rooted in the closure's captured environment
@@ -602,9 +663,9 @@ impl Evaluator {
                 self.bind_params(&func.params, args, &call_env, span)?;
                 let stmts = stmts.clone();
                 match self.eval_block(&stmts, call_env).await {
-                    Ok(())                 => Ok(Value::Null),
+                    Ok(()) => Ok(Value::Null),
                     Err(Signal::Return(v)) => Ok(v),
-                    Err(other)             => Err(other),
+                    Err(other) => Err(other),
                 }
             }
 
@@ -619,10 +680,10 @@ impl Evaluator {
 
     fn bind_params(
         &self,
-        params:   &[String],
-        args:     Vec<Value>,
+        params: &[String],
+        args: Vec<Value>,
         call_env: &Arc<Mutex<Env>>,
-        span:     &std::ops::Range<usize>,
+        span: &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
         if args.len() != params.len() {
             return Err(Signal::Error(EvalError::new(
@@ -640,24 +701,28 @@ impl Evaluator {
 // ---- Free helpers ----
 
 fn numeric_op(
-    l:    Value,
-    r:    Value,
-    op:   impl Fn(f64, f64) -> f64,
+    l: Value,
+    r: Value,
+    op: impl Fn(f64, f64) -> f64,
     span: &std::ops::Range<usize>,
 ) -> EvalResult {
     match (&l, &r) {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Number(op(*a, *b))),
         _ => Err(Signal::Error(EvalError::new(
-            format!("arithmetic requires numbers, got {} and {}", l.type_name(), r.type_name()),
+            format!(
+                "arithmetic requires numbers, got {} and {}",
+                l.type_name(),
+                r.type_name()
+            ),
             span.clone(),
         ))),
     }
 }
 
 fn compare(
-    l:    Value,
-    r:    Value,
-    op:   impl Fn(f64, f64) -> bool,
+    l: Value,
+    r: Value,
+    op: impl Fn(f64, f64) -> bool,
     span: &std::ops::Range<usize>,
 ) -> EvalResult {
     match (&l, &r) {
@@ -665,22 +730,27 @@ fn compare(
         (Value::String(a), Value::String(b)) => {
             let ord = a.cmp(b);
             Ok(Value::Bool(op(
-                match ord { std::cmp::Ordering::Less => -1.0, std::cmp::Ordering::Equal => 0.0, std::cmp::Ordering::Greater => 1.0 },
+                match ord {
+                    std::cmp::Ordering::Less => -1.0,
+                    std::cmp::Ordering::Equal => 0.0,
+                    std::cmp::Ordering::Greater => 1.0,
+                },
                 0.0,
             )))
         }
         _ => Err(Signal::Error(EvalError::new(
-            format!("cannot compare {} and {}", l.type_name(), r.type_name()), span.clone()
+            format!("cannot compare {} and {}", l.type_name(), r.type_name()),
+            span.clone(),
         ))),
     }
 }
 
 fn loose_eq(l: &Value, r: &Value) -> bool {
     match (l, r) {
-        (Value::Null,      Value::Null)      => true,
+        (Value::Null, Value::Null) => true,
         (Value::Number(a), Value::Number(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
-        (Value::Bool(a),   Value::Bool(b))   => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
         // null == null only, not null == 0 etc, keep it sane
         _ => false,
     }

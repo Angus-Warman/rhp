@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
-use clap::{Parser};
+use clap::Parser;
 use dotenv::dotenv;
+use std::path::PathBuf;
 
 use rhp::run_server;
 
@@ -33,11 +33,13 @@ async fn main() -> Result<()> {
     let folder = args.folder.context("no folder provided")?;
     let db_conn = args.db_conn.context("no db_conn provided")?;
 
-    let level = if args.debug { tracing::Level::DEBUG } else { tracing::Level::INFO };
+    let level = if args.debug {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
 
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .init();
+    tracing_subscriber::fmt().with_max_level(level).init();
 
     run_server(port, folder, &db_conn).await?;
     Ok(())

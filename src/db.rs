@@ -66,18 +66,30 @@ impl DbConn {
     /// Lazily prepare a statement that returns rows. No I/O happens until
     /// [`QueryStmt::all`] or [`QueryStmt::one`] is called.
     pub fn query(&self, sql: &str) -> QueryStmt {
-        QueryStmt { sql: sql.to_string(), binds: Vec::new(), pool: self.pool.clone() }
+        QueryStmt {
+            sql: sql.to_string(),
+            binds: Vec::new(),
+            pool: self.pool.clone(),
+        }
     }
 
     /// Lazily prepare a statement that does not return rows. No I/O happens
     /// until [`ExecStmt::run`] is called.
     pub fn exec(&self, sql: &str) -> ExecStmt {
-        ExecStmt { sql: sql.to_string(), binds: Vec::new(), pool: self.pool.clone() }
+        ExecStmt {
+            sql: sql.to_string(),
+            binds: Vec::new(),
+            pool: self.pool.clone(),
+        }
     }
 
     /// Lazily build statements targeting a single table.
     pub fn table(&self, name: &str) -> TableStmt {
-        TableStmt { table: name.to_string(), conditions: Map::new(), pool: self.pool.clone() }
+        TableStmt {
+            table: name.to_string(),
+            conditions: Map::new(),
+            pool: self.pool.clone(),
+        }
     }
 }
 
@@ -161,14 +173,21 @@ impl ExecStmt {
         let result = q.execute(&mut *conn).await?;
         let mut obj = Map::new();
         obj.insert("ok".to_string(), Value::Bool(true));
-        obj.insert("rowsAffected".to_string(), Value::from(result.rows_affected()));
+        obj.insert(
+            "rowsAffected".to_string(),
+            Value::from(result.rows_affected()),
+        );
         Ok(obj)
     }
 }
 
 impl TableStmt {
     fn query(&self, sql: String, binds: Vec<BindValue>) -> QueryStmt {
-        QueryStmt { sql, binds, pool: self.pool.clone() }
+        QueryStmt {
+            sql,
+            binds,
+            pool: self.pool.clone(),
+        }
     }
 
     /// Narrow the statements to rows matching every condition (`col = value`).
@@ -178,20 +197,31 @@ impl TableStmt {
         for (k, v) in conditions {
             merged.insert(k.clone(), v.clone());
         }
-        TableStmt { table: self.table.clone(), conditions: merged, pool: self.pool.clone() }
+        TableStmt {
+            table: self.table.clone(),
+            conditions: merged,
+            pool: self.pool.clone(),
+        }
     }
 
     /// `SELECT * FROM <table> [WHERE ...]` as a lazy [`QueryStmt`].
     pub fn all(&self) -> QueryStmt {
         let (clause, binds) = where_clause(&self.conditions);
-        self.query(format!("SELECT * FROM {}{}", quote_ident(&self.table), clause), binds)
+        self.query(
+            format!("SELECT * FROM {}{}", quote_ident(&self.table), clause),
+            binds,
+        )
     }
 
     /// `SELECT * FROM <table> [WHERE ...] LIMIT 1` as a lazy [`QueryStmt`].
     pub fn one(&self) -> QueryStmt {
         let (clause, binds) = where_clause(&self.conditions);
         self.query(
-            format!("SELECT * FROM {}{} LIMIT 1", quote_ident(&self.table), clause),
+            format!(
+                "SELECT * FROM {}{} LIMIT 1",
+                quote_ident(&self.table),
+                clause
+            ),
             binds,
         )
     }
@@ -210,7 +240,7 @@ impl TableStmt {
 
     /// Return one object per column: `{ name, type }`.
     pub async fn columns(&self) -> Vec<Object> {
-        use sqlx::{Column, Executor, Statement, SqlSafeStr};
+        use sqlx::{Column, Executor, SqlSafeStr, Statement};
 
         // Read the declared column types straight off the prepared statement:
         // `pragma_table_info` has no declared types, so the Any driver would
@@ -228,7 +258,10 @@ impl TableStmt {
         for col in stmt.columns() {
             let mut m = Map::new();
             m.insert("name".to_string(), Value::String(col.name().to_string()));
-            m.insert("type".to_string(), Value::String(kind_name(col.type_info().kind).to_string()));
+            m.insert(
+                "type".to_string(),
+                Value::String(kind_name(col.type_info().kind).to_string()),
+            );
             out.push(m);
         }
         out
@@ -240,7 +273,10 @@ impl TableStmt {
         let sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
             quote_ident(&self.table),
-            cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", "),
+            cols.iter()
+                .map(|c| quote_ident(c))
+                .collect::<Vec<_>>()
+                .join(", "),
             vec!["?"; cols.len()].join(", "),
         );
         ExecStmt {
@@ -253,9 +289,16 @@ impl TableStmt {
     /// Build an `UPDATE` from an object of column -> value, restricted to the
     /// rows matching the conditions. With no conditions it applies to every row.
     pub fn update(&self, values: &Object) -> ExecStmt {
-        let set = values.keys().map(|c| format!("{} = ?", quote_ident(c))).collect::<Vec<_>>().join(", ");
+        let set = values
+            .keys()
+            .map(|c| format!("{} = ?", quote_ident(c)))
+            .collect::<Vec<_>>()
+            .join(", ");
         let (clause, where_binds) = where_clause(&self.conditions);
-        let mut binds = values.values().map(BindValue::from_json).collect::<Vec<_>>();
+        let mut binds = values
+            .values()
+            .map(BindValue::from_json)
+            .collect::<Vec<_>>();
         binds.extend(where_binds);
         ExecStmt {
             sql: format!("UPDATE {} SET {}{}", quote_ident(&self.table), set, clause),
@@ -305,9 +348,7 @@ fn kind_name(kind: sqlx::any::AnyTypeInfoKind) -> &'static str {
     match kind {
         AnyTypeInfoKind::Null => "NULL",
         AnyTypeInfoKind::Bool => "BOOLEAN",
-        AnyTypeInfoKind::SmallInt
-        | AnyTypeInfoKind::Integer
-        | AnyTypeInfoKind::BigInt => "INTEGER",
+        AnyTypeInfoKind::SmallInt | AnyTypeInfoKind::Integer | AnyTypeInfoKind::BigInt => "INTEGER",
         AnyTypeInfoKind::Real => "REAL",
         AnyTypeInfoKind::Double => "DOUBLE",
         AnyTypeInfoKind::Blob => "BLOB",
@@ -316,8 +357,8 @@ fn kind_name(kind: sqlx::any::AnyTypeInfoKind) -> &'static str {
 }
 
 fn row_to_object(row: &sqlx::any::AnyRow) -> Result<Object> {
-    use sqlx::any::AnyTypeInfoKind;
     use sqlx::Column;
+    use sqlx::any::AnyTypeInfoKind;
 
     let mut obj = Map::new();
     for i in 0..row.len() {
@@ -325,9 +366,9 @@ fn row_to_object(row: &sqlx::any::AnyRow) -> Result<Object> {
         let value: Value = match row.column(i).type_info().kind {
             AnyTypeInfoKind::Null => Value::Null,
             AnyTypeInfoKind::Bool => serde_json::to_value(row.try_get::<Option<bool>, _>(i)?)?,
-            AnyTypeInfoKind::SmallInt
-            | AnyTypeInfoKind::Integer
-            | AnyTypeInfoKind::BigInt => serde_json::to_value(row.try_get::<Option<i64>, _>(i)?)?,
+            AnyTypeInfoKind::SmallInt | AnyTypeInfoKind::Integer | AnyTypeInfoKind::BigInt => {
+                serde_json::to_value(row.try_get::<Option<i64>, _>(i)?)?
+            }
             AnyTypeInfoKind::Real => serde_json::to_value(row.try_get::<Option<f32>, _>(i)?)?,
             AnyTypeInfoKind::Double => serde_json::to_value(row.try_get::<Option<f64>, _>(i)?)?,
             AnyTypeInfoKind::Text => serde_json::to_value(row.try_get::<Option<String>, _>(i)?)?,
