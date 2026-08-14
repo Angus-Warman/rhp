@@ -1,5 +1,5 @@
 <rhp method="GET">
-return DB.TABLE("widgets").All().All()
+return DB.TABLE("widgets").All()
 </rhp>
 
 <rhp method="POST">

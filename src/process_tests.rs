@@ -361,7 +361,7 @@ async fn test_db_table_all_count() {
         DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
         DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").Run()
         let t = DB.TABLE("users")
-        return t.Count() + ":" + t.All().All()
+        return t.Count() + ":" + t.All()
     "#).await, r#"2:[{ id: 1, name: "alice" }, { id: 2, name: "bob" }]"#);
 }
 
@@ -370,7 +370,7 @@ async fn test_db_table_one() {
     assert_eq!(test_process(r#"
         DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
         DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice')").Run()
-        return DB.TABLE("users").One().One()
+        return DB.TABLE("users").One()
     "#).await, r#"{ id: 1, name: "alice" }"#);
 }
 
@@ -390,7 +390,7 @@ async fn test_db_table_insert_update() {
         t.Insert({ id: 1, name: "alice" }).Run()
         t.Insert({ id: 2, name: "bob" }).Run()
         let updated = t.Update({ name: "renamed" }).Run()
-        let rows = t.All().All()
+        let rows = t.All()
         return updated.rowsAffected + ":" + rows
     "#).await, r#"2:[{ id: 1, name: "renamed" }, { id: 2, name: "renamed" }]"#);
 }

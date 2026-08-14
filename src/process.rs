@@ -456,7 +456,12 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         body: FunctionBody::Native(Arc::new(move |_args| {
             let stmt = all_stmt.clone();
             Box::pin(async move {
-                Ok(query_stmt_to_value(stmt.all()))
+                let objects = stmt.all().all().await;
+                let values = objects
+                    .into_iter()
+                    .map(|obj| json_to_value(serde_json::Value::Object(obj)))
+                    .collect();
+                Ok(Value::Array(Arc::new(Mutex::new(values))))
             })
         })),
         captured: Env::new_root(),
@@ -468,7 +473,8 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         body: FunctionBody::Native(Arc::new(move |_args| {
             let stmt = one_stmt.clone();
             Box::pin(async move {
-                Ok(query_stmt_to_value(stmt.one()))
+                let obj = stmt.one().one().await;
+                Ok(json_to_value(serde_json::Value::Object(obj)))
             })
         })),
         captured: Env::new_root(),
