@@ -1,4 +1,6 @@
 <rhp method="GET">
+try DB.Exec("CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY, name TEXT)").Run()
+
 if (QUERY) {
   return DB.Table("widgets").Where({ id: QUERY.id }).All()
 }

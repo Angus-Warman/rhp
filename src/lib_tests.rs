@@ -15,14 +15,20 @@ async fn unique_conn() -> DbConn {
     // sqlite ":memory:" is per-connection, so use a unique named shared
     // in-memory database per test to keep every pooled connection on the same db.
     let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-    connect(&format!("file%3Arhp_lib_test_{id}?mode=memory&cache=shared")).await.expect("in memory db")
+    connect(&format!(
+        "file%3Arhp_lib_test_{id}?mode=memory&cache=shared"
+    ))
+    .await
+    .expect("in memory db")
 }
 
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -80,7 +86,10 @@ async fn test_body_global_text() {
 #[tokio::test]
 async fn test_body_global_json() {
     let server = test_server().await;
-    let response = server.post("/body.rhp").json(&serde_json::json!({"name": "rhp"})).await;
+    let response = server
+        .post("/body.rhp")
+        .json(&serde_json::json!({"name": "rhp"}))
+        .await;
     response.assert_status_ok();
     response.assert_text(r#"{ name: "rhp" }"#);
 }
@@ -118,7 +127,6 @@ async fn test_body_global_invalid_json_is_400() {
 #[tokio::test]
 async fn test_crud_workflow() {
     let conn = unique_conn().await;
-    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
     let server = TestServer::new(build_router("./public".into(), conn));
 
     // GET: no widgets yet
@@ -126,7 +134,12 @@ async fn test_crud_workflow() {
 
     // POST: create a widget
     assert_eq!(
-        server.post("/crud.rhp").json(&serde_json::json!({"name": "widget a"})).await.text().trim(),
+        server
+            .post("/crud.rhp")
+            .json(&serde_json::json!({"name": "widget a"}))
+            .await
+            .text()
+            .trim(),
         "{ ok: true, rowsAffected: 1 }"
     );
 
@@ -138,7 +151,12 @@ async fn test_crud_workflow() {
 
     // PUT: rename it by id
     assert_eq!(
-        server.put("/crud.rhp?id=1").json(&serde_json::json!({"name": "widget a updated"})).await.text().trim(),
+        server
+            .put("/crud.rhp?id=1")
+            .json(&serde_json::json!({"name": "widget a updated"}))
+            .await
+            .text()
+            .trim(),
         "{ ok: true, rowsAffected: 1 }"
     );
 
@@ -167,10 +185,16 @@ async fn test_crud_workflow() {
 #[tokio::test]
 async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
     let conn = unique_conn().await;
-    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
     let server = TestServer::new(build_router("./public".into(), conn));
-    server.post("/crud.rhp").json(&serde_json::json!({"name": "widget a"})).await;
-    server.post("/crud.rhp").json(&serde_json::json!({"name": "widget b"})).await;
+    server.get("/crud.rhp").await;
+    server
+        .post("/crud.rhp")
+        .json(&serde_json::json!({"name": "widget a"}))
+        .await;
+    server
+        .post("/crud.rhp")
+        .json(&serde_json::json!({"name": "widget b"}))
+        .await;
 
     // The whole ?id= value is bound as a single literal, so none of these may
     // leak rows, delete anything, or drop the table.
@@ -206,8 +230,8 @@ async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
 #[tokio::test]
 async fn test_crud_sql_injection_body_name_stored_safely() {
     let conn = unique_conn().await;
-    conn.exec("CREATE TABLE widgets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)").run().await;
     let server = TestServer::new(build_router("./public".into(), conn));
+    server.get("/crud.rhp").await;
 
     // A hostile name is bound as data, not spliced into SQL.
     assert_eq!(
