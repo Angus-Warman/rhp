@@ -332,9 +332,9 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => return Ok(Value::String(format!(
-                            "DB.QUERY: expected a SQL string, got {}", other.type_name()
+                            "DB.Query: expected a SQL string, got {}", other.type_name()
                         ))),
-                        None => return Ok(Value::String("DB.QUERY: expected a SQL string".to_string())),
+                        None => return Ok(Value::String("DB.Query: expected a SQL string".to_string())),
                     };
                     Ok(query_stmt_to_value(conn.query(&sql)))
                 })
@@ -351,9 +351,9 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => return Ok(Value::String(format!(
-                            "DB.EXEC: expected a SQL string, got {}", other.type_name()
+                            "DB.Exec: expected a SQL string, got {}", other.type_name()
                         ))),
-                        None => return Ok(Value::String("DB.EXEC: expected a SQL string".to_string())),
+                        None => return Ok(Value::String("DB.Exec: expected a SQL string".to_string())),
                     };
                     Ok(exec_stmt_to_value(conn.exec(&sql)))
                 })
@@ -370,9 +370,9 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let name = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => return Ok(Value::String(format!(
-                            "DB.TABLE: expected a table name, got {}", other.type_name()
+                            "DB.Table: expected a table name, got {}", other.type_name()
                         ))),
-                        None => return Ok(Value::String("DB.TABLE: expected a table name".to_string())),
+                        None => return Ok(Value::String("DB.Table: expected a table name".to_string())),
                     };
                     Ok(table_stmt_to_value(conn.table(&name)))
                 })
@@ -382,10 +382,10 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         let db = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
-            map.insert("PING".to_string(), ping);
-            map.insert("QUERY".to_string(), query); 
-            map.insert("EXEC".to_string(), exec); 
-            map.insert("TABLE".to_string(), table); 
+            map.insert("Ping".to_string(), ping);
+            map.insert("Query".to_string(), query); 
+            map.insert("Exec".to_string(), exec); 
+            map.insert("Table".to_string(), table); 
             map
         })));
 

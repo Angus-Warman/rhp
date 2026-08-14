@@ -288,35 +288,35 @@ async fn test_db_ping() {
         request_with_body("GET", "/x", None, ""),
     ).await.unwrap();
     let env = setup_env(&context, test_conn().await);
-    assert_eq!(process_script_section(env, "return DB.PING()").await, "pong");
+    assert_eq!(process_script_section(env, "return DB.Ping()").await, "pong");
 }
 
 
 #[tokio::test]
 async fn test_db_query_all() {
     assert_eq!(test_process(r#"
-        return DB.QUERY("SELECT 2").All()
+        return DB.Query("SELECT 2").All()
     "#).await, r#"[{ 2: null }]"#);
 }
 
 #[tokio::test]
 async fn test_db_query_one() {
     assert_eq!(test_process(r#"
-        return DB.QUERY("SELECT 2").One()
+        return DB.Query("SELECT 2").One()
     "#).await, r#"{ 2: null }"#);
 }
 
 #[tokio::test]
 async fn test_db_query_returns_stmt_object() {
     assert_eq!(test_process(r#"
-        return DB.QUERY("SELECT 2")
+        return DB.Query("SELECT 2")
     "#).await, "{ All: [function], One: [function] }");
 }
 
 #[tokio::test]
 async fn test_db_query_all_invalid_returns_error_object() {
     assert_eq!(test_process(r#"
-        let res = DB.QUERY("SELECT FROM WHERE").All()[0]
+        let res = DB.Query("SELECT FROM WHERE").All()[0]
         if (!res.ok && res.error) { return "error object" }
         return "fail"
     "#).await, "error object");
@@ -325,21 +325,21 @@ async fn test_db_query_all_invalid_returns_error_object() {
 #[tokio::test]
 async fn test_db_exec_run() {
     assert_eq!(test_process(r#"
-        return DB.EXEC("CREATE TABLE t (id INTEGER)").Run()
+        return DB.Exec("CREATE TABLE t (id INTEGER)").Run()
     "#).await, "{ ok: true, rowsAffected: 0 }");
 }
 
 #[tokio::test]
 async fn test_db_exec_returns_stmt_object() {
     assert_eq!(test_process(r#"
-        return DB.EXEC("CREATE TABLE t (id INTEGER)")
+        return DB.Exec("CREATE TABLE t (id INTEGER)")
     "#).await, "{ Run: [function] }");
 }
 
 #[tokio::test]
 async fn test_db_exec_run_invalid_returns_error_object() {
     assert_eq!(test_process(r#"
-        let res = DB.EXEC("INSEERT INTO nope").Run()
+        let res = DB.Exec("INSEERT INTO nope").Run()
         if (!res.ok && res.error) { return "error object" }
         return "fail"
     "#).await, "error object");
@@ -348,8 +348,8 @@ async fn test_db_exec_run_invalid_returns_error_object() {
 #[tokio::test]
 async fn test_db_table_returns_stmt_object() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        let t = DB.TABLE("users")
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        let t = DB.Table("users")
         if (t.All && t.One && t.Count && t.Columns && t.Insert && t.Update) { return "has methods" }
         return "fail"
     "#).await, "has methods");
@@ -358,9 +358,9 @@ async fn test_db_table_returns_stmt_object() {
 #[tokio::test]
 async fn test_db_table_all_count() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").Run()
-        let t = DB.TABLE("users")
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.Exec("INSERT INTO users (id, name) VALUES (1, 'alice'), (2, 'bob')").Run()
+        let t = DB.Table("users")
         return t.Count() + ":" + t.All()
     "#).await, r#"2:[{ id: 1, name: "alice" }, { id: 2, name: "bob" }]"#);
 }
@@ -368,25 +368,25 @@ async fn test_db_table_all_count() {
 #[tokio::test]
 async fn test_db_table_one() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        DB.EXEC("INSERT INTO users (id, name) VALUES (1, 'alice')").Run()
-        return DB.TABLE("users").One()
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.Exec("INSERT INTO users (id, name) VALUES (1, 'alice')").Run()
+        return DB.Table("users").One()
     "#).await, r#"{ id: 1, name: "alice" }"#);
 }
 
 #[tokio::test]
 async fn test_db_table_columns() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        return DB.TABLE("users").Columns()
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        return DB.Table("users").Columns()
     "#).await, r#"[{ name: "id", type: "INTEGER" }, { name: "name", type: "TEXT" }]"#);
 }
 
 #[tokio::test]
 async fn test_db_table_insert_update() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        let t = DB.TABLE("users")
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        let t = DB.Table("users")
         t.Insert({ id: 1, name: "alice" }).Run()
         t.Insert({ id: 2, name: "bob" }).Run()
         let updated = t.Update({ name: "renamed" }).Run()
@@ -398,19 +398,19 @@ async fn test_db_table_insert_update() {
 #[tokio::test]
 async fn test_db_table_insert_bad_args() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER)").Run()
-        return DB.TABLE("users").Insert("nope")
+        DB.Exec("CREATE TABLE users (id INTEGER)").Run()
+        return DB.Table("users").Insert("nope")
     "#).await, "TableStmt.Insert: expected an object");
 }
 
 #[tokio::test]
 async fn test_db_table_where_delete_from_script() {
     assert_eq!(test_process(r#"
-        DB.EXEC("CREATE TABLE users (id INTEGER, name TEXT)").Run()
-        DB.TABLE("users").Insert({ id: 1, name: "alice" }).Run()
-        DB.TABLE("users").Insert({ id: 2, name: "bob" }).Run()
-        let t = DB.TABLE("users").Where({ id: 2 })
+        DB.Exec("CREATE TABLE users (id INTEGER, name TEXT)").Run()
+        DB.Table("users").Insert({ id: 1, name: "alice" }).Run()
+        DB.Table("users").Insert({ id: 2, name: "bob" }).Run()
+        let t = DB.Table("users").Where({ id: 2 })
         let deleted = t.Delete().Run()
-        return deleted.rowsAffected + ":" + t.Count() + ":" + DB.TABLE("users").Count()
+        return deleted.rowsAffected + ":" + t.Count() + ":" + DB.Table("users").Count()
     "#).await, "1:0:1");
 }
