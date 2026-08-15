@@ -5,12 +5,14 @@ use super::*;
 static DB_ID: AtomicU64 = AtomicU64::new(0);
 
 async fn test_conn() -> DbConn {
-    // sqlite ":memory:" is per-connection, so use a unique named shared
-    // in-memory database per test to keep every pooled connection on the same db.
+    // Use a named shared in-memory database per test so every pooled
+    // connection is on the same db.
     let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-    connect(&format!("file%3Arhp_test_{id}?mode=memory&cache=shared"))
-        .await
-        .unwrap()
+    connect(&format!(
+        "sqlite://file%3Arhp_test_{id}?mode=memory&cache=shared"
+    ))
+    .await
+    .unwrap()
 }
 
 fn val(s: &str) -> Object {
@@ -430,4 +432,34 @@ async fn test_table_where_count() {
 
     let cond = Map::from_iter([("name".to_string(), Value::from("bob"))]);
     assert_eq!(conn.table("users").where_(&cond).count().await, 1);
+}
+
+#[tokio::test]
+async fn test_file_db_persists_across_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "rhp_db_file_test_{}",
+        DB_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let binding = dir.join("test.db");
+    let dsn = binding.to_str().expect("a string");
+
+    {
+        let conn = connect(&dsn).await.unwrap();
+        conn.exec("CREATE TABLE visits (count INTEGER)").run().await;
+        conn.exec("INSERT INTO visits (count) VALUES (1)")
+            .run()
+            .await;
+        let rows = conn.query("SELECT count FROM visits").all().await;
+        assert_eq!(rows, vec![val(r#"{"count":1}"#)]);
+    } // conn dropped: connection pool closed, simulating a server restart
+
+    // The database lives in a real file on disk, not in memory.
+    assert!(dir.join("test.db").is_file());
+
+    let conn = connect(&dsn).await.unwrap();
+    let rows = conn.query("SELECT count FROM visits").all().await;
+    assert_eq!(rows, vec![val(r#"{"count":1}"#)]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }

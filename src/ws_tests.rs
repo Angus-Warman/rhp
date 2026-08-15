@@ -10,9 +10,11 @@ static WS_ID: AtomicU64 = AtomicU64::new(0);
 
 async fn ws_conn() -> DbConn {
     let id = WS_ID.fetch_add(1, Ordering::Relaxed);
-    crate::db::connect(&format!("file%3Arhp_ws_test_{id}?mode=memory&cache=shared"))
-        .await
-        .expect("in memory db")
+    crate::db::connect(&format!(
+        "sqlite://file%3Arhp_ws_test_{id}?mode=memory&cache=shared"
+    ))
+    .await
+    .expect("in memory db")
 }
 
 fn write_ws_script(src: &str) -> PathBuf {

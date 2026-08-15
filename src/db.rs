@@ -390,7 +390,8 @@ fn error_object(msg: &str) -> Object {
 }
 
 fn normalise_dsn(dsn: &str) -> String {
-    if dsn.starts_with("postgres") {
+    if dsn.starts_with("postgres") || dsn.starts_with("sqlite") {
+        // Assume the user knows what they are doing
         dsn.into()
     } else if dsn == ":memory:" {
         // A plain ":memory:" database is per-connection, so each pooled
@@ -398,7 +399,9 @@ fn normalise_dsn(dsn: &str) -> String {
         // in-memory database so every connection lands on the same one.
         "sqlite://file%3Arhp?mode=memory&cache=shared".into()
     } else {
-        format!("sqlite://{dsn}")
+        // A bare path: open read-write and create the file if missing, so
+        // something like "test.db" just works.
+        format!("sqlite://{dsn}?mode=rwc")
     }
 }
 

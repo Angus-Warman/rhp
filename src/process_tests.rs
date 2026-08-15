@@ -5,11 +5,11 @@ use super::*;
 static DB_ID: AtomicU64 = AtomicU64::new(0);
 
 async fn test_conn() -> DbConn {
-    // sqlite ":memory:" is per-connection, so use a unique named shared
-    // in-memory database per test to keep every pooled connection on the same db.
+    // Use a unique named shared in-memory database per test to keep every
+    // pooled connection on the same db.
     let id = DB_ID.fetch_add(1, Ordering::Relaxed);
     crate::db::connect(&format!(
-        "file%3Arhp_proc_test_{id}?mode=memory&cache=shared"
+        "sqlite://file%3Arhp_proc_test_{id}?mode=memory&cache=shared"
     ))
     .await
     .unwrap()
