@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
 
 use crate::db::DbConn;
+use crate::ws::SocketRef;
 use crate::{
     eval::Evaluator,
     lexer,
@@ -24,6 +25,7 @@ pub struct Context {
     pub method: Method,
     pub query: HashMap<String, String>,
     pub body: Value,
+    pub socket: Option<SocketRef>,
 }
 
 #[derive(Debug)]
@@ -61,6 +63,7 @@ impl Context {
             method,
             query,
             body: body_value,
+            socket: None,
         })
     }
 }
@@ -71,6 +74,7 @@ impl Default for Context {
             method: Method::All,
             query: HashMap::new(),
             body: empty_object(),
+            socket: None,
         }
     }
 }
@@ -164,6 +168,31 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> String 
     output
 }
 
+/// Run the `<rhp method="SOCKET">` sections for a websocket connection and
+/// return the value the first section returns with `return` (if any). The
+/// returned value becomes the first message sent on the socket.
+pub async fn process_socket_src(src: String, context: Context, conn: DbConn) -> Option<Value> {
+    let env = setup_env(&context, conn);
+
+    for section in split_src(&src) {
+        if let Section::Code { code, method } = section
+            && method.matches(&context.method)
+        {
+            let tokens = lexer::lex_code(&code).unwrap();
+            let (stmts, _) = Parser::parse(tokens);
+            let mut evaluator = Evaluator::new();
+            let _ = evaluator.eval_stmts(&stmts, env.clone()).await;
+            if let Some(returned) = evaluator.returned
+                && !matches!(returned, Value::Null)
+            {
+                return Some(returned);
+            }
+        }
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Get,
@@ -173,6 +202,7 @@ pub enum Method {
     Delete,
     Patch,
     Options,
+    Socket,
     All,
 }
 
@@ -186,6 +216,7 @@ impl Method {
             "DELETE" => Method::Delete,
             "PATCH" => Method::Patch,
             "OPTIONS" => Method::Options,
+            "SOCKET" => Method::Socket,
             _ => Method::All,
         }
     }
@@ -412,6 +443,10 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         })));
 
         env_mut.define("DB", db);
+
+        if let Some(socket) = &context.socket {
+            env_mut.define("SOCKET", crate::ws::socket_value(socket));
+        }
     }
 
     env
@@ -625,7 +660,7 @@ fn value_to_object(v: &Value) -> Option<serde_json::Map<String, serde_json::Valu
     }
 }
 
-fn value_to_json(v: &Value) -> serde_json::Value {
+pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),

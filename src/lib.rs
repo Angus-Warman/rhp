@@ -1,10 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use axum::{
     Router, debug_handler,
-    extract::{Request, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Request, State},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::any,
 };
@@ -15,6 +18,7 @@ use tower_http::trace::TraceLayer;
 use crate::{
     db::{DbConn, connect},
     process::{Context, process_src},
+    ws::{SocketRegistry, run_socket},
 };
 
 mod ast;
@@ -24,6 +28,7 @@ mod lexer;
 mod parser;
 mod process;
 mod value;
+mod ws;
 
 pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
@@ -39,10 +44,15 @@ pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()>
 struct AppState {
     folder: PathBuf,
     conn: DbConn,
+    sockets: Arc<SocketRegistry>,
 }
 
 fn build_router(folder: PathBuf, conn: DbConn) -> Router {
-    let state = AppState { folder, conn };
+    let state = AppState {
+        folder,
+        conn,
+        sockets: Arc::new(SocketRegistry::new()),
+    };
 
     Router::new()
         .route("/{*path}", any(rhp_handler))
@@ -56,6 +66,28 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
         .folder
         .join(request.uri().path().trim_start_matches('/'));
 
+    if is_ws_upgrade(&request) {
+        let uri = request.uri().clone();
+        let mut parts = request.into_parts().0;
+        let upgrade =
+            match axum::extract::ws::WebSocketUpgrade::from_request_parts(&mut parts, &state).await
+            {
+                Ok(upgrade) => upgrade,
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            };
+        return upgrade
+            .on_upgrade(move |socket| {
+                let folder = state.folder.clone();
+                let conn = state.conn.clone();
+                let sockets = state.sockets.clone();
+                async move {
+                    let path = folder.join(uri.path().trim_start_matches('/'));
+                    run_socket(socket, uri, path, conn, sockets).await;
+                }
+            })
+            .into_response();
+    }
+
     if Path::new(&path).extension().is_some_and(|ext| ext == "rhp") {
         process_rhp(path, request, state.conn).await.into_response()
     } else {
@@ -64,6 +96,20 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
             .await
             .into_response()
     }
+}
+
+fn is_ws_upgrade(request: &Request) -> bool {
+    let has = |name: axum::http::HeaderName| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| {
+                v.to_ascii_lowercase().contains("upgrade")
+                    || v.to_ascii_lowercase().contains("websocket")
+            })
+    };
+    has(header::CONNECTION) && has(header::UPGRADE)
 }
 
 async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response {
@@ -85,3 +131,7 @@ async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response 
 #[cfg(test)]
 #[path = "./lib_tests.rs"]
 mod lib_tests;
+
+#[cfg(test)]
+#[path = "./ws_tests.rs"]
+mod ws_tests;

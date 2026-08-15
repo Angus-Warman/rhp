@@ -25,6 +25,7 @@ fn ctx(method: Method) -> Context {
         method,
         query: HashMap::new(),
         body: empty_object(),
+        socket: None,
     }
 }
 

@@ -13,7 +13,7 @@ struct Args {
     port: Option<u16>,
 
     /// Files to serve
-    #[arg(short, long, env = "FOLDER", default_value = ".")]
+    #[arg(short, long, env = "FOLDER", default_value = "./public")]
     folder: Option<PathBuf>,
 
     /// Turn debugging information on

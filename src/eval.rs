@@ -52,13 +52,15 @@ type StmtResult = Result<(), Signal>;
 // ---- Evaluator ----
 
 pub struct Evaluator {
-    pub output: String, // HTML output buffer
+    pub output: String,          // HTML output buffer
+    pub returned: Option<Value>, // value returned by `return`, if any
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         Self {
             output: String::new(),
+            returned: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl Evaluator {
                     Signal::Error(e) => return Err(e),
                     Signal::Return(value) => {
                         self.output += &value.display();
+                        self.returned = Some(value);
                         return Ok(());
                     }
                     Signal::Break => {
@@ -699,6 +702,31 @@ impl Evaluator {
 }
 
 // ---- Free helpers ----
+
+/// Invoke a stored script function from native/pump code.
+pub async fn call_value(value: Value, args: Vec<Value>) -> Result<Value, EvalError> {
+    let func = match value {
+        Value::Function(func) => func,
+        other => {
+            return Err(EvalError::new(
+                format!("cannot call {}", other.type_name()),
+                0..0,
+            ));
+        }
+    };
+    let mut evaluator = Evaluator::new();
+    let span = 0..0;
+    evaluator
+        .call_function(func, args, &span)
+        .await
+        .map_err(|signal| match signal {
+            Signal::Error(e) => e,
+            other => EvalError::new(
+                format!("unexpected control flow in callback: {:?}", other),
+                span.clone(),
+            ),
+        })
+}
 
 fn numeric_op(
     l: Value,

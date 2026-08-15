@@ -1,0 +1,6 @@
+<rhp method="SOCKET">
+SOCKET.Join(QUERY.room)
+SOCKET.Client().OnMessage(msg => SOCKET.Peers().Send(msg))
+SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ event: "leave" }))
+return { event: "welcome", id: SOCKET.Client().Id() }
+</rhp>
