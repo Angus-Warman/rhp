@@ -94,6 +94,17 @@ impl DbConn {
 }
 
 impl QueryStmt {
+    /// Append a bound parameter, replacing the `?` in the SQL in order.
+    pub(crate) fn bind(&self, value: &serde_json::Value) -> QueryStmt {
+        let mut binds = self.binds.clone();
+        binds.push(BindValue::from_json(value));
+        QueryStmt {
+            sql: self.sql.clone(),
+            binds,
+            pool: self.pool.clone(),
+        }
+    }
+
     /// Run the statement and collect every returned row.
     pub async fn all(&self) -> Vec<Object> {
         match self.fetch_all().await {

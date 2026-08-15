@@ -488,7 +488,22 @@ async fn test_db_query_returns_stmt_object() {
     "#
         )
         .await,
-        "{ All: [function], One: [function] }"
+        "{ All: [function], Bind: [function], One: [function] }"
+    );
+}
+
+#[tokio::test]
+async fn test_db_query_bind_param() {
+    assert_eq!(
+        test_process(
+            r#"
+        DB.Exec("CREATE TABLE t (id INTEGER, name TEXT)").Run()
+        DB.Exec("INSERT INTO t (id, name) VALUES (1, 'alice'), (2, 'bob')").Run()
+        return DB.Query("SELECT name FROM t WHERE id = ?").Bind(2).One().name
+    "#
+        )
+        .await,
+        "bob"
     );
 }
 

@@ -205,6 +205,13 @@
                 if (data.event === 'welcome') {
                     me = data.id;
                     setStatus('connected as ' + me.slice(0, 8));
+                    if (data.history) {
+                        data.history.forEach((row) => {
+                            let m;
+                            try { m = JSON.parse(row.body); } catch (e) { return; }
+                            addMessage(m);
+                        });
+                    }
                 } else if (data.event === 'leave') {
                     addMessage({ system: true, text: 'A user left the room' });
                 } else {
@@ -245,10 +252,20 @@
 
 </html>
 
+<rhp method="GET">
+    try DB.Exec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, createdAt INTEGER, room TEXT, body TEXT)").Run()
+</rhp>
+
 <rhp method="SOCKET">
     let room = QUERY.room || "general"
     SOCKET.Join(room)
-    SOCKET.Client().OnMessage(msg => SOCKET.Peers().Send(msg))
+
+    let history = DB.Query("SELECT * FROM (SELECT * FROM messages WHERE room = ? ORDER BY id DESC LIMIT 10) ORDER BY id ASC").Bind(room).All()
+
+    SOCKET.Client().OnMessage(msg => {
+        DB.Table("messages").Insert({ room: room, body: msg }).Run()
+        SOCKET.Peers().Send(msg)
+    })
     SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ event: "leave", id: SOCKET.Client().Id() }))
-    return { event: "welcome", id: SOCKET.Client().Id(), room: room }
+    return { event: "welcome", id: SOCKET.Client().Id(), room: room, history: history }
 </rhp>

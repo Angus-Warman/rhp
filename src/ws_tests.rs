@@ -235,6 +235,48 @@ async fn test_chat_rhp_serves_page_and_relays_messages() {
     assert_no_message(&mut c).await;
 }
 
+#[tokio::test]
+async fn test_chat_rhp_persists_and_replays_history() {
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("public");
+    let conn = ws_conn().await;
+    let server = TestServer::builder()
+        .http_transport()
+        .build(build_router(folder, conn));
+
+    // The page GET runs the `<rhp method="GET">` section that creates the table.
+    server.get("/chat.rhp").await.assert_status_ok();
+
+    let mut a = ws_connect(&server, "/chat.rhp?room=alpha").await;
+    let _: serde_json::Value = a.receive_json().await; // welcome
+    let mut b = ws_connect(&server, "/chat.rhp?room=alpha").await;
+    let _: serde_json::Value = b.receive_json().await; // welcome
+    let mut c = ws_connect(&server, "/chat.rhp?room=beta").await;
+    let _: serde_json::Value = c.receive_json().await; // welcome
+
+    // Messages are relayed to peers in the same room...
+    a.send_text(r#"{"name":"alice","text":"first"}"#).await;
+    a.send_text(r#"{"name":"alice","text":"second"}"#).await;
+    assert_eq!(b.receive_text().await, r#"{"name":"alice","text":"first"}"#);
+    assert_eq!(
+        b.receive_text().await,
+        r#"{"name":"alice","text":"second"}"#
+    );
+    assert_no_message(&mut c).await;
+
+    // ...and a fresh join replays the stored history for that room only.
+    let mut d = ws_connect(&server, "/chat.rhp?room=alpha").await;
+    let welcome: serde_json::Value = d.receive_json().await;
+    assert_eq!(welcome["event"], "welcome");
+    let history = welcome["history"].as_array().unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0]["body"], r#"{"name":"alice","text":"first"}"#);
+    assert_eq!(history[1]["body"], r#"{"name":"alice","text":"second"}"#);
+
+    let mut e = ws_connect(&server, "/chat.rhp?room=beta").await;
+    let welcome_beta: serde_json::Value = e.receive_json().await;
+    assert_eq!(welcome_beta["history"].as_array().unwrap().len(), 0);
+}
+
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {

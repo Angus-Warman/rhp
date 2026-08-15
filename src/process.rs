@@ -454,6 +454,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
 fn query_stmt_to_value(stmt: crate::db::QueryStmt) -> Value {
     let all_stmt = stmt.clone();
+    let bind_stmt = stmt.clone();
     let all = Value::Function(Function {
         params: vec![],
         body: FunctionBody::Native(Arc::new(move |_args| {
@@ -482,9 +483,25 @@ fn query_stmt_to_value(stmt: crate::db::QueryStmt) -> Value {
         captured: Env::new_root(),
     });
 
+    let bind = Value::Function(Function {
+        params: vec!["value".to_string()],
+        body: FunctionBody::Native(Arc::new(move |args| {
+            let stmt = bind_stmt.clone();
+            Box::pin(async move {
+                let value = match args.first() {
+                    Some(v) => value_to_json(v),
+                    None => serde_json::Value::Null,
+                };
+                Ok(query_stmt_to_value(stmt.bind(&value)))
+            })
+        })),
+        captured: Env::new_root(),
+    });
+
     let mut map = HashMap::new();
     map.insert("All".to_string(), all);
     map.insert("One".to_string(), one);
+    map.insert("Bind".to_string(), bind);
     Value::Object(Arc::new(Mutex::new(map)))
 }
 
