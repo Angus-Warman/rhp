@@ -55,6 +55,7 @@ fn build_router(folder: PathBuf, conn: DbConn) -> Router {
     };
 
     Router::new()
+        .route("/", any(rhp_handler))
         .route("/{*path}", any(rhp_handler))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
@@ -62,10 +63,6 @@ fn build_router(folder: PathBuf, conn: DbConn) -> Router {
 
 #[debug_handler]
 async fn rhp_handler(State(state): State<AppState>, request: Request) -> Response {
-    let path = state
-        .folder
-        .join(request.uri().path().trim_start_matches('/'));
-
     if is_ws_upgrade(&request) {
         let uri = request.uri().clone();
         let mut parts = request.into_parts().0;
@@ -81,20 +78,34 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
                 let conn = state.conn.clone();
                 let sockets = state.sockets.clone();
                 async move {
-                    let path = folder.join(uri.path().trim_start_matches('/'));
-                    run_socket(socket, uri, path, conn, sockets).await;
+                    let path = resolve_rhp(&folder, uri.path());
+                    run_socket(socket, uri, path.unwrap_or(folder), conn, sockets).await;
                 }
             })
             .into_response();
     }
 
-    if Path::new(&path).extension().is_some_and(|ext| ext == "rhp") {
-        process_rhp(path, request, state.conn).await.into_response()
-    } else {
-        ServeDir::new(state.folder)
+    match resolve_rhp(&state.folder, request.uri().path()) {
+        Some(rhp) => process_rhp(rhp, request, state.conn).await.into_response(),
+        None => ServeDir::new(state.folder)
             .oneshot(request)
             .await
-            .into_response()
+            .into_response(),
+    }
+}
+
+/// Resolve a request path to the .rhp source it should execute, if any:
+/// either the file itself when it ends in .rhp, or `index.rhp` when the
+/// path names a directory.
+fn resolve_rhp(folder: &Path, uri_path: &str) -> Option<PathBuf> {
+    let path = folder.join(uri_path.trim_start_matches('/'));
+    if path.extension().is_some_and(|ext| ext == "rhp") {
+        Some(path)
+    } else if path.is_dir() {
+        let index = path.join("index.rhp");
+        index.is_file().then_some(index)
+    } else {
+        None
     }
 }
 

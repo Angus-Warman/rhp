@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+
+<body>
+    <p>
+        This page has been visited
+        <strong><rhp method="GET">
+            try DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)").Run()
+
+            if (DB.Table("visits").Count() == 0) {
+                DB.Table("visits").Insert({ value: 1 }).Run()
+                return 1
+            }
+            let visits = DB.Table("visits").One().value
+            visits++
+            DB.Table("visits").Update({ value: visits }).Run()
+            return visits
+        </rhp></strong>
+        times.
+    </p>
+</body>
+
+</html>

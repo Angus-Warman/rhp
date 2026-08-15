@@ -393,7 +393,10 @@ fn normalise_dsn(dsn: &str) -> String {
     if dsn.starts_with("postgres") {
         dsn.into()
     } else if dsn == ":memory:" {
-        "sqlite::memory:".into()
+        // A plain ":memory:" database is per-connection, so each pooled
+        // connection would get its own empty database. Use a named shared
+        // in-memory database so every connection lands on the same one.
+        "sqlite://file%3Arhp?mode=memory&cache=shared".into()
     } else {
         format!("sqlite://{dsn}")
     }

@@ -22,6 +22,61 @@ async fn unique_conn() -> DbConn {
     .expect("in memory db")
 }
 
+fn temp_folder(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rhp_test_{}_{}", name, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, contents) in files {
+        std::fs::write(dir.join(file), contents).unwrap();
+    }
+    dir
+}
+
+#[tokio::test]
+async fn test_index_rhp_visit_counter() {
+    let src = std::fs::read_to_string("./public/index.rhp").unwrap();
+    let folder = temp_folder(
+        "index_visit_counter",
+        &[("index.rhp", &src), ("index.html", "<h1>static</h1>")],
+    );
+    let conn = unique_conn().await;
+    let server = TestServer::new(build_router(folder, conn));
+    for expected in 1..=3 {
+        let response = server.get("/").await;
+        response.assert_status_ok();
+        response.assert_text_contains(format!("<strong>{expected}</strong>"));
+    }
+}
+
+#[tokio::test]
+async fn test_root_prefers_index_rhp() {
+    let folder = temp_folder(
+        "index_rhp_and_html",
+        &[
+            ("index.html", "<h1>static index</h1>"),
+            ("index.rhp", "<h1>rhp index</h1>"),
+        ],
+    );
+    let conn = unique_conn().await;
+    let server = TestServer::new(build_router(folder, conn));
+    let response = server.get("/").await;
+    response.assert_status_ok();
+    response.assert_text_contains("rhp index");
+}
+
+#[tokio::test]
+async fn test_root_serves_static_index_without_rhp() {
+    let folder = temp_folder(
+        "index_html_only",
+        &[("index.html", "<h1>static index</h1>")],
+    );
+    let conn = unique_conn().await;
+    let server = TestServer::new(build_router(folder, conn));
+    let response = server.get("/").await;
+    response.assert_status_ok();
+    response.assert_text_contains("static index");
+}
+
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
