@@ -1234,3 +1234,89 @@ async fn test_html_block() {
         "1:true"
     );
 }
+
+#[tokio::test]
+async fn test_html_template_basic() {
+    assert_eq!(
+        test_process(
+            r#"
+        let x = "foo"
+        return <><p>{x}</p></>
+    "#
+        )
+        .await,
+        "<p>foo</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_escapes_malicious_input() {
+    assert_eq!(
+        test_process(
+            r#"
+        let user_comment = "<script>console.log('oh no')</script>"
+        return <><p>{user_comment}</p></>
+    "#
+        )
+        .await,
+        "<p>&lt;script&gt;console.log(&#x27;oh no&#x27;)&lt;&#x2F;script&gt;</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_full_escape_map() {
+    assert_eq!(
+        test_process(
+            r#"
+        let evil = "a\"b'c`d/e=f<g>h&i"
+        return <><p>{evil}</p></>
+    "#
+        )
+        .await,
+        "<p>a&quot;b&#x27;c&grave;d&#x2F;e&#x3D;f&lt;g&gt;h&amp;i</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_text_and_nested_elements() {
+    assert_eq!(
+        test_process(
+            r#"
+        let first = "Ada"
+        let last = "Lovelace"
+        return <><h1>Hi {first}</h1><p>{first} {last}</p></>
+    "#
+        )
+        .await,
+        "<h1>Hi Ada</h1><p>Ada Lovelace</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_element_root_and_number_slot() {
+    assert_eq!(
+        test_process(
+            r#"
+        let count = 3
+        return <p>items: {count}</p>
+    "#
+        )
+        .await,
+        "<p>items: 3</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_expression_in_slot() {
+    assert_eq!(
+        test_process(
+            r#"
+        let a = 2
+        let b = 3
+        return <><p>{a} + {b} = {a + b}</p></>
+    "#
+        )
+        .await,
+        "<p>2 + 3 = 5</p>"
+    );
+}

@@ -2,18 +2,20 @@ use crate::ast::*;
 use crate::lexer::Span;
 use crate::lexer::{ParseError, Spanned, SpannedToken, Token, merge_spans};
 
-pub struct Parser {
+pub struct Parser<'a> {
     tokens: Vec<SpannedToken>,
     pos: usize,
     errors: Vec<ParseError>,
+    source: &'a str,
 }
 
-impl Parser {
-    pub fn new(tokens: Vec<SpannedToken>) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(tokens: Vec<SpannedToken>, source: &'a str) -> Self {
         Self {
             tokens,
             pos: 0,
             errors: Vec::new(),
+            source,
         }
     }
 
@@ -32,6 +34,14 @@ impl Parser {
             .or_else(|| self.tokens.last())
             .map(|t| t.span.clone())
             .unwrap_or(0..0)
+    }
+
+    // End of the most recently consumed token (0 when nothing was consumed).
+    fn last_consumed_end(&self) -> usize {
+        self.tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|t| t.span.end)
+            .unwrap_or(0)
     }
 
     fn advance(&mut self) -> Option<&SpannedToken> {
@@ -106,8 +116,8 @@ impl Parser {
     //     span
     // }
 
-    pub fn parse(tokens: Vec<SpannedToken>) -> (Vec<Stmt>, Vec<ParseError>) {
-        let mut p = Parser::new(tokens);
+    pub fn parse(tokens: Vec<SpannedToken>, source: &str) -> (Vec<Stmt>, Vec<ParseError>) {
+        let mut p = Parser::new(tokens, source);
         let stmts = p.parse_block_contents();
         (stmts, p.errors)
     }
@@ -662,6 +672,8 @@ impl Parser {
                 Ok(Spanned::new(RawExpr::Object(pairs), span.start..end))
             }
 
+            Some(Token::Lt) => self.parse_html_template(),
+
             _ => {
                 let span = self.current_span();
                 Err(ParseError {
@@ -675,11 +687,189 @@ impl Parser {
         }
     }
 
+    // ---- HTML templates: <><p>{expr}</p></> ----
+    //
+    // The parser works on the token stream, so text between tags and `{}`
+    // slots is reconstructed by slicing the original source between token
+    // spans (whitespace is skipped by the lexer but preserved this way).
+
+    // Entry point, called from parse_primary with the current token being `<`.
+    fn parse_html_template(&mut self) -> Result<Expr, ParseError> {
+        let start = self.current_span().start;
+        let nodes = match self.tokens.get(self.pos + 1).map(|t| &t.node) {
+            // `<> ... </>`
+            Some(Token::Gt) => {
+                self.advance(); // `<`
+                self.advance(); // `>`
+                self.parse_template_children(None)?
+            }
+            // `<tag> ... </tag>` or `<tag/>`
+            Some(Token::Ident(tag)) => {
+                let tag = tag.clone();
+                self.advance(); // `<`
+                self.advance(); // tag
+                if self.peek() == Some(&Token::Slash) {
+                    self.advance();
+                    self.expect(&Token::Gt, "expected `>` after self-closing tag");
+                    vec![TemplateNode::Element {
+                        tag,
+                        children: vec![],
+                    }]
+                } else {
+                    self.expect(&Token::Gt, "expected `>` after tag name");
+                    let children = self.parse_template_children(Some(&tag))?;
+                    vec![TemplateNode::Element { tag, children }]
+                }
+            }
+            _ => {
+                return Err(ParseError {
+                    message: "expected `<>` or `<tag>` after `<`".to_string(),
+                    span: self.current_span(),
+                });
+            }
+        };
+        let end = self.current_span().end;
+        Ok(Spanned::new(RawExpr::HtmlTemplate(nodes), start..end))
+    }
+
+    // Parse template children until the matching close tag. `expect_close`
+    // is the tag name that must close this level (None means a fragment,
+    // which must close with `</>`).
+    fn parse_template_children(
+        &mut self,
+        expect_close: Option<&str>,
+    ) -> Result<Vec<TemplateNode>, ParseError> {
+        let mut nodes = Vec::new();
+        // Text starts after the open tag's closing `>`, so whitespace that
+        // the lexer skipped between tokens still lands inside the text.
+        let mut text_start = self.last_consumed_end();
+
+        loop {
+            let token_start = self.current_span().start;
+            match self.peek() {
+                None => {
+                    return Err(ParseError {
+                        message: "unclosed template tag".to_string(),
+                        span: self.current_span(),
+                    });
+                }
+                Some(Token::Lt) => match self.tokens.get(self.pos + 1).map(|t| &t.node) {
+                    Some(Token::Gt) => {
+                        // `<> ... </>` nested fragment — flatten into this level
+                        if token_start > text_start {
+                            nodes.push(TemplateNode::Text(
+                                self.source[text_start..token_start].to_string(),
+                            ));
+                        }
+                        self.advance(); // `<`
+                        self.advance(); // `>`
+                        let inner = self.parse_template_children(None)?;
+                        nodes.extend(inner);
+                        text_start = self.last_consumed_end();
+                    }
+                    Some(Token::Slash) => {
+                        // Close tag `</...>` or `</>`
+                        if token_start > text_start {
+                            nodes.push(TemplateNode::Text(
+                                self.source[text_start..token_start].to_string(),
+                            ));
+                        }
+                        self.advance(); // `<`
+                        self.advance(); // `/`
+                        match self.peek() {
+                            Some(Token::Gt) => {
+                                self.advance(); // `>`
+                                if expect_close.is_some() {
+                                    return Err(ParseError {
+                                        message: "expected a closing tag, found `</>`".to_string(),
+                                        span: self.current_span(),
+                                    });
+                                }
+                                return Ok(nodes);
+                            }
+                            Some(Token::Ident(tag)) => {
+                                let tag = tag.clone();
+                                self.advance();
+                                self.expect(&Token::Gt, "expected `>` after closing tag");
+                                return match expect_close {
+                                    Some(expected) if expected == tag => Ok(nodes),
+                                    Some(expected) => Err(ParseError {
+                                        message: format!(
+                                            "expected `</{}>` but found `</{}>`",
+                                            expected, tag
+                                        ),
+                                        span: self.current_span(),
+                                    }),
+                                    None => Err(ParseError {
+                                        message: format!("unexpected closing tag `</{}>`", tag),
+                                        span: self.current_span(),
+                                    }),
+                                };
+                            }
+                            _ => {
+                                return Err(ParseError {
+                                    message: "expected a tag name after `</`".to_string(),
+                                    span: self.current_span(),
+                                });
+                            }
+                        }
+                    }
+                    Some(Token::Ident(tag)) => {
+                        // Element `<tag> ... </tag>` or `<tag/>`
+                        if token_start > text_start {
+                            nodes.push(TemplateNode::Text(
+                                self.source[text_start..token_start].to_string(),
+                            ));
+                        }
+                        let tag = tag.clone();
+                        self.advance(); // `<`
+                        self.advance(); // tag
+                        if self.peek() == Some(&Token::Slash) {
+                            self.advance();
+                            self.expect(&Token::Gt, "expected `>` after self-closing tag");
+                            nodes.push(TemplateNode::Element {
+                                tag,
+                                children: vec![],
+                            });
+                        } else {
+                            self.expect(&Token::Gt, "expected `>` after tag name");
+                            let children = self.parse_template_children(Some(&tag))?;
+                            nodes.push(TemplateNode::Element { tag, children });
+                        }
+                        text_start = self.last_consumed_end();
+                    }
+                    _ => {
+                        return Err(ParseError {
+                            message: "expected a template tag after `<`".to_string(),
+                            span: self.current_span(),
+                        });
+                    }
+                },
+                Some(Token::LBrace) => {
+                    // `{ expr }` slot
+                    if token_start > text_start {
+                        nodes.push(TemplateNode::Text(
+                            self.source[text_start..token_start].to_string(),
+                        ));
+                    }
+                    self.advance(); // `{`
+                    let expr = self.parse_assign()?;
+                    self.expect(&Token::RBrace, "expected `}` after template expression");
+                    nodes.push(TemplateNode::Expr(Box::new(expr)));
+                    text_start = self.last_consumed_end();
+                }
+                Some(_) => {
+                    // Ordinary token — part of the surrounding text.
+                    self.advance();
+                }
+            }
+        }
+    }
+
     // Single bare ident, could be the start of an arrow: `x => ...`
     fn parse_ident_or_arrow(&mut self) -> Result<Expr, ParseError> {
         let span = self.current_span();
         let name = self.expect_ident("expected identifier")?;
-
         if self.peek() == Some(&Token::Arrow) {
             self.advance(); // eat =>
             let body = self.parse_arrow_body()?;

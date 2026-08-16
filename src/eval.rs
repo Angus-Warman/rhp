@@ -417,7 +417,41 @@ impl Evaluator {
                 })?;
                 Ok(Value::Null)
             }
+
+            RawExpr::HtmlTemplate(nodes) => {
+                let html = self.eval_template(nodes, env).await?;
+                Ok(Value::String(html))
+            }
         }
+    }
+
+    // Render a template, escaping every `{expr}` slot.
+    #[async_recursion]
+    async fn eval_template(
+        &mut self,
+        nodes: &[TemplateNode],
+        env: Arc<Mutex<Env>>,
+    ) -> Result<String, Signal> {
+        let mut out = String::new();
+        for node in nodes {
+            match node {
+                TemplateNode::Text(text) => out.push_str(text),
+                TemplateNode::Element { tag, children } => {
+                    out.push('<');
+                    out.push_str(tag);
+                    out.push('>');
+                    out.push_str(&self.eval_template(children, env.clone()).await?);
+                    out.push_str("</");
+                    out.push_str(tag);
+                    out.push('>');
+                }
+                TemplateNode::Expr(expr) => {
+                    let value = self.eval_expr(expr, env.clone()).await?;
+                    out.push_str(&escape_html(&value.display()));
+                }
+            }
+        }
+        Ok(out)
     }
 
     // ---- Prefix / Postfix ----
@@ -873,4 +907,23 @@ fn loose_eq(l: &Value, r: &Value) -> bool {
         // null == null only, not null == 0 etc, keep it sane
         _ => false,
     }
+}
+
+/// Escape a dynamic value for safe inclusion in HTML output.
+fn escape_html(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            '/' => out.push_str("&#x2F;"),
+            '`' => out.push_str("&grave;"),
+            '=' => out.push_str("&#x3D;"),
+            other => out.push(other),
+        }
+    }
+    out
 }

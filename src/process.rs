@@ -179,7 +179,7 @@ pub async fn process_socket_src(src: String, context: Context, conn: DbConn) -> 
             && method.matches(&context.method)
         {
             let tokens = lexer::lex_code(&code).unwrap();
-            let (stmts, _) = Parser::parse(tokens);
+            let (stmts, _) = Parser::parse(tokens, &code);
             let mut evaluator = Evaluator::new();
             let _ = evaluator.eval_stmts(&stmts, env.clone()).await;
             if let Some(returned) = evaluator.returned
@@ -702,7 +702,7 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
 
 async fn process_script_section(env: Arc<Mutex<Env>>, script: &str) -> String {
     let tokens = lexer::lex_code(script).unwrap();
-    let (stmts, _) = Parser::parse(tokens);
+    let (stmts, _) = Parser::parse(tokens, script);
     let mut evalulator = Evaluator::new();
 
     evalulator.eval_stmts(&stmts, env).await.unwrap();

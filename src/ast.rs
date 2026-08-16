@@ -79,6 +79,19 @@ pub enum RawExpr {
 
     // <html> ... </html> block inside script
     HtmlBlock(Vec<Stmt>),
+
+    // JSX-like template: <><p>{expr}</p></>
+    HtmlTemplate(Vec<TemplateNode>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplateNode {
+    Element {
+        tag: String,
+        children: Vec<TemplateNode>,
+    },
+    Text(String),
+    Expr(Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
