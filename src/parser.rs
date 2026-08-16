@@ -114,7 +114,10 @@ impl Parser {
 
     fn parse_block_contents(&mut self) -> Vec<Stmt> {
         let mut stmts = Vec::new();
-        while !self.is_at_end() && self.peek() != Some(&Token::RBrace) {
+        while !self.is_at_end()
+            && self.peek() != Some(&Token::RBrace)
+            && self.peek() != Some(&Token::HtmlClose)
+        {
             stmts.push(self.parse_stmt());
         }
         stmts
@@ -229,6 +232,11 @@ impl Parser {
         self.advance(); // eat `for`
         self.expect(&Token::LParen, "expected `(` after `for`");
 
+        // `for (x in y) { ... }` (the `in` lexes as an identifier)
+        if let Some(for_in) = self.try_parse_for_in()? {
+            return Ok(for_in);
+        }
+
         // init
         let init = if self.peek() == Some(&Token::Semicolon) {
             self.advance();
@@ -261,6 +269,47 @@ impl Parser {
             update,
             body,
         })
+    }
+
+    // Attempt to parse `for (x in y) { ... }`. Returns Ok(None) when the
+    // tokens don't match the shape, in which case nothing was consumed and
+    // the caller falls back to the C-style `for`.
+    fn try_parse_for_in(&mut self) -> Result<Option<RawStmt>, ParseError> {
+        let saved_pos = self.pos;
+        let saved_errors = self.errors.len();
+
+        // Optional `let`/`const`/`var` before the loop variable.
+        match self.peek() {
+            Some(Token::Let) | Some(Token::Const) | Some(Token::Var) => {
+                self.advance();
+            }
+            _ => {}
+        }
+
+        let Some(Token::Ident(var)) = self.peek().cloned() else {
+            self.pos = saved_pos;
+            self.errors.truncate(saved_errors);
+            return Ok(None);
+        };
+        self.advance();
+
+        // `in` lexes as an identifier.
+        if self.peek() != Some(&Token::Ident("in".to_string())) {
+            self.pos = saved_pos;
+            self.errors.truncate(saved_errors);
+            return Ok(None);
+        }
+        self.advance();
+
+        // Committed: this is a for-in loop.
+        let iterable = self.parse_assign()?;
+        self.expect(&Token::RParen, "expected `)` after `for (x in y)`");
+        let body = self.parse_block();
+        Ok(Some(RawStmt::ForIn {
+            var,
+            iterable,
+            body,
+        }))
     }
 
     fn parse_return(&mut self) -> Result<RawStmt, ParseError> {

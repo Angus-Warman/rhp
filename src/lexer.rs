@@ -40,7 +40,7 @@ impl std::error::Error for ParseError {}
 
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(skip r"[ \t\r\n]+")]
-#[logos(skip r"//[^\n]")] // single-line comments. TODO: Check if that * was needed
+#[logos(skip(r"//[^\n]*", allow_greedy = true))] // single-line comments
 #[logos(skip r"/\*([^*]|\*[^/])*\*/")] // block comments
 pub enum Token {
     // --- Keywords ---
@@ -89,10 +89,10 @@ pub enum Token {
     #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().to_string())]
     Number(String),
 
-    #[regex(r#""([^"\\]|\\.)*""#, |lex| lex.slice().to_string())]
+    #[regex(r#""([^"\\]|\\.)*""#, |lex| unescape_string(lex.slice()))]
     StringDouble(String),
 
-    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| lex.slice().to_string())]
+    #[regex(r#"'([^'\\]|\\.)*'"#, |lex| unescape_string(lex.slice()))]
     StringSingle(String),
 
     // --- Operators (longer tokens first) ---
@@ -170,6 +170,35 @@ pub enum Token {
     Colon,
     #[token("?")]
     Question,
+}
+
+/// Strip the surrounding quotes from a string literal and process `\\`
+/// escapes (`\\`, `\"`, `\'`, `\n`, `\t`, `\r`; unknown escapes are kept
+/// literally).
+fn unescape_string(s: &str) -> String {
+    let inner = &s[1..s.len() - 1];
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('\\') => out.push('\\'),
+                Some('"') => out.push('"'),
+                Some('\'') => out.push('\''),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 pub fn lex_code(src: &str) -> Result<Vec<Spanned<Token>>, Vec<ParseError>> {

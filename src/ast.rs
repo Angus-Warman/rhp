@@ -168,6 +168,13 @@ pub enum RawStmt {
         body: Vec<Stmt>,
     },
 
+    // for (x in y) { ... }
+    ForIn {
+        var: String,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
+
     Return(Option<Expr>),
     Try(Expr),
     Break,

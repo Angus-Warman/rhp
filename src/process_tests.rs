@@ -674,3 +674,563 @@ async fn test_db_table_where_delete_from_script() {
         "1:0:1"
     );
 }
+
+#[tokio::test]
+async fn test_for_in_array() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (x in [1, 2, 3]) { sum += x }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_number_counts_up_from_zero() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (i in 4) { sum += i }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_string_yields_letters() {
+    assert_eq!(
+        test_process(
+            r"
+        let out = ''
+        for (c in 'abc') { out += c }
+        return out
+    "
+        )
+        .await,
+        "abc"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_object_yields_keys() {
+    assert_eq!(
+        test_process(
+            r"
+        let o = { a: 1, b: 2, c: 3 }
+        let count = 0
+        for (k in o) { count += 1 }
+        return count
+    "
+        )
+        .await,
+        "3"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_object_membership() {
+    assert_eq!(
+        test_process(
+            r"
+        let o = { a: 1, b: 2, c: 3 }
+        let found = false
+        for (k in o) { if (k === 'b') { found = true } }
+        return found
+    "
+        )
+        .await,
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_break() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (x in [1, 2, 3]) { if (x === 2) { break } sum += x }
+        return sum
+    "
+        )
+        .await,
+        "1"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_continue() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (x in [1, 2, 3, 4]) { if (x === 2) { continue } sum += x }
+        return sum
+    "
+        )
+        .await,
+        "8"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_nested() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (x in [1, 2]) { for (y in [10, 20]) { sum += x * y } }
+        return sum
+    "
+        )
+        .await,
+        "90"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_variable_stays_scoped_to_loop() {
+    assert_eq!(
+        test_process(
+            r"
+        let x = 'outer'
+        for (x in [1, 2, 3]) { }
+        return x
+    "
+        )
+        .await,
+        "outer"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_loop_variable_not_visible_after_loop() {
+    assert_eq!(
+        test_process(
+            r"
+        let seen = 0
+        for (x in [7, 8, 9]) { seen = x }
+        return seen
+    "
+        )
+        .await,
+        "9"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_zero_iterations() {
+    assert_eq!(
+        test_process(
+            r"
+        let count = 0
+        for (x in []) { count += 1 }
+        for (i in 0) { count += 1 }
+        for (c in '') { count += 1 }
+        for (k in {}) { count += 1 }
+        return count
+    "
+        )
+        .await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_with_let_keyword() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let x in [1, 2, 3]) { sum += x }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_for_in_inside_function() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = (arr) => {
+            let total = 0
+            for (x in arr) { total += x }
+            return total
+        }
+        return sum([1, 2, 3])
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_still_parses_after_for_in() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 4; i++) { sum += i }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_basic_count() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 5; i++) { sum += i }
+        return sum
+    "
+        )
+        .await,
+        "10"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_existing_var_no_let() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (i = 0; i < 3; i++) { sum += i }
+        return sum
+    "
+        )
+        .await,
+        "3"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_counting_down() {
+    assert_eq!(
+        test_process(
+            r"
+        let out = ''
+        for (let i = 3; i >= 0; i--) { out += i }
+        return out
+    "
+        )
+        .await,
+        "3210"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_step_by_two() {
+    assert_eq!(
+        test_process(
+            r"
+        let out = ''
+        for (let i = 0; i < 10; i += 2) { out += i }
+        return out
+    "
+        )
+        .await,
+        "02468"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_empty_init() {
+    assert_eq!(
+        test_process(
+            r"
+        let i = 0
+        let sum = 0
+        for (; i < 3; i++) { sum += i }
+        return sum
+    "
+        )
+        .await,
+        "3"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_empty_cond_with_break() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; ; i++) { if (i >= 4) { break } sum += i }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_empty_update_with_increment_in_body() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 4;) { sum += i; i++ }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_continue_skips_update() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 5; i++) { if (i === 2) { continue } sum += i }
+        return sum
+    "
+        )
+        .await,
+        "8"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_break_stops_early() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 100; i++) { if (i === 4) { break } sum += i }
+        return sum
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_nested() {
+    assert_eq!(
+        test_process(
+            r"
+        let out = ''
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 2; j++) { out += i * 10 + j }
+        }
+        return out
+    "
+        )
+        .await,
+        "0110112021"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_zero_iterations() {
+    assert_eq!(
+        test_process(
+            r"
+        let count = 0
+        for (let i = 0; i > 5; i++) { count += 1 }
+        return count
+    "
+        )
+        .await,
+        "0"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_does_not_leak_loop_var() {
+    assert_eq!(
+        test_process(
+            r"
+        let i = 'outer'
+        for (let i = 0; i < 3; i++) { }
+        return i
+    "
+        )
+        .await,
+        "outer"
+    );
+}
+
+#[tokio::test]
+async fn test_c_style_for_and_for_in_coexist() {
+    assert_eq!(
+        test_process(
+            r"
+        let sum = 0
+        for (let i = 0; i < 3; i++) {
+            for (x in [10, 20]) { sum += i + x }
+        }
+        for (y in [100, 200]) { for (let j = 0; j < 2; j++) { sum += y + j } }
+        return sum
+    "
+        )
+        .await,
+        "698"
+    );
+}
+
+#[tokio::test]
+async fn test_fizzbuzz_while() {
+    assert_eq!(
+        test_process(
+            r"
+        let out = ''
+        let i = 1
+        while (i <= 15) {
+            if (i % 15 === 0) { out += 'FizzBuzz' }
+            else if (i % 3 === 0) { out += 'Fizz' }
+            else if (i % 5 === 0) { out += 'Buzz' }
+            else { out += i }
+            out += ','
+            i++
+        }
+        return out
+    "
+        )
+        .await,
+        "1,2,Fizz,4,Buzz,Fizz,7,8,Fizz,Buzz,11,Fizz,13,14,FizzBuzz,"
+    );
+}
+
+#[tokio::test]
+async fn test_price_calculator() {
+    assert_eq!(
+        test_process(
+            r"
+        let price = 120
+        let discount = 20
+        let total = price - discount
+        total *= 2
+        total /= 4
+        total -= 5
+        total += total % 10
+        return total + ' for ' + total / 2 + ' each'
+    "
+        )
+        .await,
+        "50 for 25 each"
+    );
+}
+
+#[tokio::test]
+async fn test_inventory_object_index() {
+    assert_eq!(
+        test_process(
+            r"
+        const stock = { apples: 3, oranges: 2 }
+        var total = 0
+        for (k in stock) { total += stock[k] }
+        if (total != 5) { return 'wrong count' }
+        if (total !== 5) { return 'strict mismatch' }
+        stock['plums'] = 4
+        return stock['plums'] + stock['apples']
+    "
+        )
+        .await,
+        "7"
+    );
+}
+
+#[tokio::test]
+async fn test_prefix_increment_and_negation() {
+    assert_eq!(
+        test_process(
+            r"
+        let i = 3
+        let a = ++i
+        let b = a--
+        let c = --a
+        let neg = -c
+        let back = -neg
+        return a + ':' + b + ':' + c + ':' + neg + ':' + back
+    "
+        )
+        .await,
+        "2:4:2:-2:2"
+    );
+}
+
+#[tokio::test]
+async fn test_pagination_defaults() {
+    assert_eq!(
+        test_process(
+            r"
+        let page = 0
+        let size = 0
+        size = size || 20
+        let offset = page * size
+        let hasMore = page <= 2
+        if (hasMore == true) { page++ }
+        if (page != 1) { return 'no' }
+        if (page === 1 && size !== 10) { return 'ok:' + size }
+        return 'fail'
+    "
+        )
+        .await,
+        "ok:20"
+    );
+}
+
+#[tokio::test]
+async fn test_comments_and_string_escapes() {
+    assert_eq!(
+        test_process(
+            r#"
+        // single-line comment
+        let a = 1 /* inline block */ + 2 // trailing
+        /* multi-line
+           comment */
+        let path = 'a\\b'
+        let quote = "he said \"hi\""
+        let joined = path + '|' + quote
+        return a + ':' + joined
+    "#
+        )
+        .await,
+        r#"3:a\b|he said "hi""#
+    );
+}
+
+#[tokio::test]
+async fn test_html_block() {
+    assert_eq!(
+        test_process(
+            r"
+        let state = { hits: 0 }
+        <html>
+            state.hits = 1
+            state.meta = 'x'
+            if (state.hits === 1) { state.ok = true }
+        </html>
+        return state.hits + ':' + state.ok
+    "
+        )
+        .await,
+        "1:true"
+    );
+}

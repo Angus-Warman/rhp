@@ -189,6 +189,79 @@ impl Evaluator {
                 Ok(())
             }
 
+            RawStmt::ForIn {
+                var,
+                iterable,
+                body,
+            } => {
+                let iter_val = self.eval_expr(iterable, env.clone()).await?;
+                let loop_env = Env::new_child(env);
+                loop_env.lock().unwrap().define(var, Value::Null);
+
+                match &iter_val {
+                    Value::Array(arr) => {
+                        let items = arr.lock().unwrap().clone();
+                        for item in items {
+                            if !self
+                                .eval_for_in_iteration(var, item, &loop_env, body)
+                                .await?
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    Value::Number(n) => {
+                        for i in 0..n.floor() as i64 {
+                            if !self
+                                .eval_for_in_iteration(
+                                    var,
+                                    Value::Number(i as f64),
+                                    &loop_env,
+                                    body,
+                                )
+                                .await?
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    Value::String(s) => {
+                        for ch in s.chars() {
+                            if !self
+                                .eval_for_in_iteration(
+                                    var,
+                                    Value::String(ch.to_string()),
+                                    &loop_env,
+                                    body,
+                                )
+                                .await?
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    Value::Object(map) => {
+                        let keys: Vec<String> = map.lock().unwrap().keys().cloned().collect();
+                        for key in keys {
+                            if !self
+                                .eval_for_in_iteration(var, Value::String(key), &loop_env, body)
+                                .await?
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    Value::Null => {}
+                    other => {
+                        return Err(Signal::Error(EvalError::new(
+                            format!("cannot iterate over {}", other.type_name()),
+                            stmt.span.clone(),
+                        )));
+                    }
+                }
+                Ok(())
+            }
+
             RawStmt::Return(expr) => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e, env).await?,
@@ -224,6 +297,26 @@ impl Evaluator {
         Ok(())
     }
 
+    // Bind `item` to `var` and run one for-in iteration. Returns Ok(true)
+    // to keep looping, Ok(false) to stop (a `break` fired).
+    #[async_recursion]
+    async fn eval_for_in_iteration(
+        &mut self,
+        var: &str,
+        item: Value,
+        loop_env: &Arc<Mutex<Env>>,
+        body: &[Stmt],
+    ) -> Result<bool, Signal> {
+        loop_env.lock().unwrap().set(var, item);
+        let iter_env = Env::new_child(loop_env.clone());
+        match self.eval_block(body, iter_env).await {
+            Ok(()) => Ok(true),
+            Err(Signal::Break) => Ok(false),
+            Err(Signal::Continue) => Ok(true),
+            Err(e) => Err(e),
+        }
+    }
+
     // ---- Expressions ----
 
     #[async_recursion]
@@ -232,9 +325,7 @@ impl Evaluator {
             RawExpr::Null => Ok(Value::Null),
             RawExpr::Bool(b) => Ok(Value::Bool(*b)),
             RawExpr::Number(n) => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
-            RawExpr::StringLit(s) => Ok(Value::String(
-                s.trim_matches(|c| c == '"' || c == '\'').to_string(),
-            )),
+            RawExpr::StringLit(s) => Ok(Value::String(s.clone())),
 
             RawExpr::Ident(name) => env.lock().unwrap().get(name).ok_or_else(|| {
                 Signal::Error(EvalError::new(
