@@ -371,6 +371,161 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("JSON", json);
 
+        // Define TIME.Unix_Sec / Unix_Ms / Unix_Ns
+        let time_sec = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|_args| {
+                Box::pin(async move { Ok(Value::Number(unix_time().as_secs() as f64)) })
+            })),
+            captured: Env::new_root(),
+        });
+        let time_ms = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|_args| {
+                Box::pin(async move { Ok(Value::Number(unix_time().as_millis() as f64)) })
+            })),
+            captured: Env::new_root(),
+        });
+        let time_ns = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|_args| {
+                Box::pin(async move { Ok(Value::Number(unix_time().as_nanos() as f64)) })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let time = Value::Object(Arc::new(Mutex::new({
+            let mut map = HashMap::new();
+            map.insert("Unix_Sec".to_string(), time_sec);
+            map.insert("Unix_Ms".to_string(), time_ms);
+            map.insert("Unix_Ns".to_string(), time_ns);
+            map
+        })));
+
+        env_mut.define("TIME", time);
+
+        // Define MATH.Random / Ceil / Floor / Avg / Sum / Min / Max
+        let math_random = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|_args| {
+                Box::pin(async move { Ok(Value::Number(random_f64())) })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_ceil = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match args.first() {
+                        Some(Value::Number(n)) => Ok(Value::Number(n.ceil())),
+                        Some(other) => Ok(error_value(format!(
+                            "MATH.Ceil: expected a number, got {}",
+                            other.type_name()
+                        ))),
+                        None => Ok(error_value("MATH.Ceil: expected a number")),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_floor = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match args.first() {
+                        Some(Value::Number(n)) => Ok(Value::Number(n.floor())),
+                        Some(other) => Ok(error_value(format!(
+                            "MATH.Floor: expected a number, got {}",
+                            other.type_name()
+                        ))),
+                        None => Ok(error_value("MATH.Floor: expected a number")),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_avg = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match math_numbers(args) {
+                        Ok(nums) if nums.is_empty() => {
+                            Ok(error_value("MATH.Avg: expected at least one number"))
+                        }
+                        Ok(nums) => Ok(Value::Number(nums.iter().sum::<f64>() / nums.len() as f64)),
+                        Err(msg) => Ok(error_value(format!("MATH.Avg: {msg}"))),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_sum = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match math_numbers(args) {
+                        Ok(nums) => Ok(Value::Number(nums.iter().sum())),
+                        Err(msg) => Ok(error_value(format!("MATH.Sum: {msg}"))),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_min = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match math_numbers(args) {
+                        Ok(nums) if nums.is_empty() => {
+                            Ok(error_value("MATH.Min: expected at least one number"))
+                        }
+                        Ok(nums) => Ok(Value::Number(
+                            nums.into_iter().fold(f64::INFINITY, f64::min),
+                        )),
+                        Err(msg) => Ok(error_value(format!("MATH.Min: {msg}"))),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math_max = Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    match math_numbers(args) {
+                        Ok(nums) if nums.is_empty() => {
+                            Ok(error_value("MATH.Max: expected at least one number"))
+                        }
+                        Ok(nums) => Ok(Value::Number(
+                            nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
+                        )),
+                        Err(msg) => Ok(error_value(format!("MATH.Max: {msg}"))),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let math = Value::Object(Arc::new(Mutex::new({
+            let mut map = HashMap::new();
+            map.insert("Random".to_string(), math_random);
+            map.insert("Ceil".to_string(), math_ceil);
+            map.insert("Floor".to_string(), math_floor);
+            map.insert("Avg".to_string(), math_avg);
+            map.insert("Sum".to_string(), math_sum);
+            map.insert("Min".to_string(), math_min);
+            map.insert("Max".to_string(), math_max);
+            map
+        })));
+
+        env_mut.define("MATH", math);
+
         // Define console.log
         let log = Value::Function(Function {
             params: vec!["value".to_string()],
@@ -736,6 +891,55 @@ fn error_value(msg: impl Into<String>) -> Value {
     map.insert("ok".to_string(), Value::Bool(false));
     map.insert("error".to_string(), Value::String(msg.into()));
     Value::Object(Arc::new(Mutex::new(map)))
+}
+
+fn unix_time() -> std::time::Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+fn random_f64() -> f64 {
+    use std::cell::Cell;
+    thread_local! {
+        static STATE: Cell<u64> = const { Cell::new(0) };
+    }
+    STATE.with(|state| {
+        let mut x = state.get();
+        if x == 0 {
+            x = unix_time().as_nanos() as u64 ^ 0x9E37_79B9_7F4A_7C15;
+            if x == 0 {
+                x = 1;
+            }
+        }
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        state.set(x);
+        (x >> 11) as f64 / (1u64 << 53) as f64
+    })
+}
+
+fn math_numbers(args: Vec<Value>) -> Result<Vec<f64>, String> {
+    let mut out = Vec::new();
+    if let [Value::Array(arr)] = args.as_slice() {
+        for v in arr.lock().unwrap().iter() {
+            match v {
+                Value::Number(n) => out.push(*n),
+                other => {
+                    return Err(format!("expected numbers, got {}", other.type_name()));
+                }
+            }
+        }
+        return Ok(out);
+    }
+    for v in &args {
+        match v {
+            Value::Number(n) => out.push(*n),
+            other => return Err(format!("expected numbers, got {}", other.type_name())),
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {

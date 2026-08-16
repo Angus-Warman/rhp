@@ -739,22 +739,28 @@ impl Evaluator {
                 .unwrap_or(Value::Null)),
             Value::Array(arr) => match property {
                 "length" => Ok(Value::Number(arr.lock().unwrap().len() as f64)),
-                other => Err(Signal::Error(EvalError::new(
-                    format!("array has no property `{}`", other),
-                    span.clone(),
-                ))),
+                other => bind_method(obj.clone(), other).ok_or_else(|| {
+                    Signal::Error(EvalError::new(
+                        format!("array has no property `{}`", other),
+                        span.clone(),
+                    ))
+                }),
             },
             Value::String(s) => match property {
                 "length" => Ok(Value::Number(s.len() as f64)),
-                other => Err(Signal::Error(EvalError::new(
-                    format!("string has no property `{}`", other),
-                    span.clone(),
-                ))),
+                other => bind_method(obj.clone(), other).ok_or_else(|| {
+                    Signal::Error(EvalError::new(
+                        format!("string has no property `{}`", other),
+                        span.clone(),
+                    ))
+                }),
             },
-            other => Err(Signal::Error(EvalError::new(
-                format!("cannot access property on {}", other.type_name()),
-                span.clone(),
-            ))),
+            other => bind_method(obj.clone(), property).ok_or_else(|| {
+                Signal::Error(EvalError::new(
+                    format!("cannot access property on {}", other.type_name()),
+                    span.clone(),
+                ))
+            }),
         }
     }
 
@@ -954,4 +960,130 @@ fn escape_html(input: &str) -> String {
         }
     }
     out
+}
+
+// ---- Value methods (x.split(" "), x.trim(), ...) ----
+
+type MethodImpl = fn(&Value, &[Value]) -> Result<Value, String>;
+
+fn bind_method(receiver: Value, name: &str) -> Option<Value> {
+    let f: MethodImpl = match (&receiver, name) {
+        (Value::String(_), "split") => string_split,
+        (Value::String(_), "trim") => string_trim,
+        (Value::String(_), "toUpper") => string_to_upper,
+        (Value::String(_), "toLower") => string_to_lower,
+        (Value::String(_), "replace") => string_replace,
+        (Value::String(_), "contains") => string_contains,
+        (Value::Array(_), "push") => array_push,
+        (Value::Array(_), "join") => array_join,
+        _ => return None,
+    };
+    Some(Value::Function(Function {
+        params: vec![],
+        body: FunctionBody::Native(Arc::new(move |args| {
+            let receiver = receiver.clone();
+            Box::pin(async move {
+                match f(&receiver, &args) {
+                    Ok(v) => Ok(v),
+                    Err(msg) => Ok(method_error(msg)),
+                }
+            })
+        })),
+        captured: Env::new_root(),
+    }))
+}
+
+fn method_error(msg: String) -> Value {
+    let mut map = HashMap::new();
+    map.insert("ok".to_string(), Value::Bool(false));
+    map.insert("error".to_string(), Value::String(msg));
+    Value::Object(Arc::new(Mutex::new(map)))
+}
+
+fn string_split(s: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let parts: Vec<Value> = match args.first() {
+        None => s
+            .split_whitespace()
+            .map(|p| Value::String(p.to_string()))
+            .collect(),
+        Some(Value::String(sep)) if sep.is_empty() => {
+            s.chars().map(|c| Value::String(c.to_string())).collect()
+        }
+        Some(Value::String(sep)) => s
+            .split(sep.as_str())
+            .map(|p| Value::String(p.to_string()))
+            .collect(),
+        Some(other) => {
+            return Err(format!(
+                "split: expected a string separator, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    Ok(Value::Array(Arc::new(Mutex::new(parts))))
+}
+
+fn string_trim(s: &Value, _args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    Ok(Value::String(s.trim().to_string()))
+}
+
+fn string_to_upper(s: &Value, _args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    Ok(Value::String(s.to_uppercase()))
+}
+
+fn string_to_lower(s: &Value, _args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    Ok(Value::String(s.to_lowercase()))
+}
+
+fn string_replace(s: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    match args {
+        [Value::String(from), Value::String(to)] => {
+            Ok(Value::String(s.replace(from.as_str(), to.as_str())))
+        }
+        _ => Err("replace: expected (old, new) string arguments".to_string()),
+    }
+}
+
+fn string_contains(s: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    match args {
+        [Value::String(needle)] => Ok(Value::Bool(s.contains(needle.as_str()))),
+        _ => Err("contains: expected a string argument".to_string()),
+    }
+}
+
+fn array_push(a: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(arr) = a else { unreachable!("bound method receiver") };
+    let Some(item) = args.first().cloned() else {
+        return Err("push: expected an item".to_string());
+    };
+    let mut lock = arr.lock().unwrap();
+    lock.push(item);
+    Ok(Value::Number(lock.len() as f64))
+}
+
+fn array_join(a: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(arr) = a else { unreachable!("bound method receiver") };
+    let sep = match args.first() {
+        None => ",".to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => {
+            return Err(format!(
+                "join: expected a string separator, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    let lock = arr.lock().unwrap();
+    let joined = lock
+        .iter()
+        .map(|v| v.display())
+        .collect::<Vec<String>>()
+        .join(&sep);
+    Ok(Value::String(joined))
 }

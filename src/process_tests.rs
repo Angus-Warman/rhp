@@ -530,6 +530,64 @@ async fn test_try_var_decl_returns_value() {
 }
 
 #[tokio::test]
+async fn test_worked_try_bubbles_errors() {
+    // A signup pipeline where every step returns `{ ok: true, ... }` on
+    // success or `{ ok: false, error: msg }` on failure. Each `try` returns
+    // the failing step's error object, bubbling it up through the call stack
+    // until the top-level `return` renders it.
+    let script = r#"
+        function validate_name(name) {
+            if (name == '') { return { ok: false, error: 'name is required' } }
+            return { ok: true, name: name }
+        }
+
+        function validate_age(age) {
+            if (age < 0) { return { ok: false, error: 'age cannot be negative' } }
+            if (age < 18) { return { ok: false, error: 'must be 18 or older' } }
+            return { ok: true, age: age }
+        }
+
+        function create_account(name, age) {
+            try let n = validate_name(name)
+            try let a = validate_age(age)
+            return { ok: true, name: n.name, age: a.age }
+        }
+
+        function run_signup(name, age) {
+            try let account = create_account(name, age)
+            return 'welcome ' + account.name + ' (' + account.age + ')'
+        }
+    "#;
+
+    // Happy path: every try continues, the pipeline completes.
+    assert_eq!(
+        test_process(&format!("{script}\nreturn run_signup('ada', 30)")).await,
+        "welcome ada (30)"
+    );
+
+    // Each failure short-circuits at the offending step and bubbles up the
+    // exact error object — no intermediate step rewrites or swallows it.
+    assert_eq!(
+        test_process(&format!("{script}\nreturn run_signup('ada', 17)")).await,
+        "{ error: \"must be 18 or older\", ok: false }"
+    );
+    assert_eq!(
+        test_process(&format!("{script}\nreturn run_signup('ada', -3)")).await,
+        "{ error: \"age cannot be negative\", ok: false }"
+    );
+    assert_eq!(
+        test_process(&format!("{script}\nreturn run_signup('', 30)")).await,
+        "{ error: \"name is required\", ok: false }"
+    );
+
+    // The first error wins when multiple steps would fail.
+    assert_eq!(
+        test_process(&format!("{script}\nreturn run_signup('', -1)")).await,
+        "{ error: \"name is required\", ok: false }"
+    );
+}
+
+#[tokio::test]
 async fn test_db_ping() {
     let context = Context::from_request(request_with_body("GET", "/x", None, ""))
         .await
@@ -1413,5 +1471,98 @@ async fn test_html_template_ternary() {
         )
         .await,
         r#"<button class="primary">Post</button>"#
+    );
+}
+
+#[tokio::test]
+async fn test_time_intrinsics() {
+    assert_eq!(
+        test_process(
+            r#"
+        let s = TIME.Unix_Sec()
+        let ms = TIME.Unix_Ms()
+        let ns = TIME.Unix_Ns()
+        return (ns > ms * 1000) + ':' + (ms >= s * 1000) + ':' + (s > 1700000000)
+    "#
+        )
+        .await,
+        "true:true:true"
+    );
+}
+
+#[tokio::test]
+async fn test_math_intrinsics() {
+    assert_eq!(
+        test_process(r#"return MATH.Random() >= 0 && MATH.Random() < 1"#).await,
+        "true"
+    );
+    assert_eq!(
+        test_process(r#"return MATH.Ceil(2.1) + ':' + MATH.Floor(2.9)"#).await,
+        "3:2"
+    );
+    assert_eq!(
+        test_process(
+            r#"return MATH.Sum(1, 2, 3) + ':' + MATH.Sum([1, 2, 3]) + ':' + MATH.Sum()"#
+        )
+        .await,
+        "6:6:0"
+    );
+    assert_eq!(
+        test_process(
+            r#"return MATH.Avg(1, 2, 3) + ':' + MATH.Min(3, 1, 2) + ':' + MATH.Max(3, 1, 2)"#
+        )
+        .await,
+        "2:1:3"
+    );
+    // Type errors surface as { ok: false, error }
+    assert_eq!(test_process(r#"return MATH.Ceil("a").ok"#).await, "false");
+    assert_eq!(test_process(r#"return MATH.Sum("a").ok"#).await, "false");
+    assert_eq!(test_process(r#"return MATH.Avg().ok"#).await, "false");
+    assert_eq!(test_process(r#"return MATH.Min().ok"#).await, "false");
+}
+
+#[tokio::test]
+async fn test_string_methods() {
+    assert_eq!(
+        test_process(r#"return "foo bar baz".split(" ")"#).await,
+        r#"["foo", "bar", "baz"]"#
+    );
+    assert_eq!(
+        test_process(r#"return "a b c".split()"#).await,
+        r#"["a", "b", "c"]"#
+    );
+    assert_eq!(
+        test_process(r#"return "hello".split("")"#).await,
+        r#"["h", "e", "l", "l", "o"]"#
+    );
+    assert_eq!(test_process(r#"return "  hi  ".trim()"#).await, "hi");
+    assert_eq!(
+        test_process(r#"return "aBc".toUpper() + ':' + "AbC".toLower()"#).await,
+        "ABC:abc"
+    );
+    assert_eq!(
+        test_process(r#"return "a1b2".replace("1", "X") + ':' + "hello".contains("ell")"#).await,
+        "aXb2:true"
+    );
+    assert_eq!(test_process(r#"return "x".split(42).ok"#).await, "false");
+    assert_eq!(test_process(r#"return "x".contains().ok"#).await, "false");
+}
+
+#[tokio::test]
+async fn test_array_methods() {
+    assert_eq!(
+        test_process(
+            r#"
+        let a = [1, 2]
+        let n = a.push(3)
+        return n + ':' + a.join('-')
+    "#
+        )
+        .await,
+        "3:1-2-3"
+    );
+    assert_eq!(
+        test_process(r#"return [1, 2, 3].length + ':' + [1, 2, 3].join()"#).await,
+        "3:1,2,3"
     );
 }
