@@ -8,7 +8,7 @@ use axum::{
     Router, debug_handler,
     extract::{FromRequestParts, Request, State},
     http::{StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::any,
 };
 use tower::util::ServiceExt;
@@ -132,8 +132,8 @@ async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response 
                     return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
                 }
             };
-            let html = process_src(src, context, conn).await;
-            Html(html).into_response()
+            let (html, response) = process_src(src, context, conn).await;
+            response.into_axum(html)
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }

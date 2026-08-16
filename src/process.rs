@@ -24,6 +24,7 @@ use crate::{
 pub struct Context {
     pub method: Method,
     pub query: HashMap<String, String>,
+    pub headers: HashMap<String, String>,
     pub body: Value,
     pub socket: Option<SocketRef>,
 }
@@ -59,9 +60,21 @@ impl Context {
             .map_err(ContextError::Body)?;
         let body_value = parse_body(method, &parts.headers, &bytes)?;
 
+        let headers = parts
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_ascii_lowercase(), v.to_string()))
+            })
+            .collect();
+
         Ok(Self {
             method,
             query,
+            headers,
             body: body_value,
             socket: None,
         })
@@ -73,6 +86,7 @@ impl Default for Context {
         Self {
             method: Method::All,
             query: HashMap::new(),
+            headers: HashMap::new(),
             body: empty_object(),
             socket: None,
         }
@@ -148,7 +162,7 @@ fn json_to_value(json: serde_json::Value) -> Value {
     }
 }
 
-pub async fn process_src(src: String, context: Context, conn: DbConn) -> String {
+pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String, HttpResponse) {
     let env = setup_env(&context, conn);
     let mut output = "".to_string();
 
@@ -160,12 +174,27 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> String 
             Section::Code { code, method } if method.matches(&context.method) => {
                 let result = process_script_section(env.clone(), &code).await;
                 output += &result;
+                // A script that sent a full body or a redirect owns the
+                // response; stop rendering further sections.
+                if response_owns_body(&env) {
+                    break;
+                }
             }
             Section::Code { .. } => {}
         }
     }
 
-    output
+    let response = HttpResponse::from_env(&env);
+    (output, response)
+}
+
+/// True once the script set a body or redirect via RES.
+fn response_owns_body(env: &Arc<Mutex<Env>>) -> bool {
+    let Some(Value::Object(map)) = env.lock().unwrap().get("RES") else {
+        return false;
+    };
+    let lock = map.lock().unwrap();
+    lock.contains_key("_body") || lock.contains_key("_redirect")
 }
 
 /// Run the `<rhp method="SOCKET">` sections for a websocket connection and
@@ -230,6 +259,87 @@ impl Method {
 pub enum Section {
     Html(String),
     Code { code: String, method: Method },
+}
+
+/// Script-controlled HTTP response state, populated by the `RES` object.
+#[derive(Debug, Clone, Default)]
+pub struct HttpResponse {
+    pub status: Option<u16>,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
+    pub content_type: Option<String>,
+    pub redirect: Option<String>,
+}
+
+impl HttpResponse {
+    /// Read the response state written by the script into the `RES`
+    /// global, if any.
+    pub fn from_env(env: &Arc<Mutex<Env>>) -> Self {
+        let mut response = Self::default();
+        let Some(Value::Object(map)) = env.lock().unwrap().get("RES") else {
+            return response;
+        };
+        let lock = map.lock().unwrap();
+        if let Some(Value::Number(n)) = lock.get("_status") {
+            response.status = Some(*n as u16);
+        }
+        if let Some(Value::String(url)) = lock.get("_redirect") {
+            response.redirect = Some(url.clone());
+        }
+        if let Some(Value::String(body)) = lock.get("_body") {
+            response.body = Some(body.clone());
+        }
+        if let Some(Value::String(ct)) = lock.get("_content_type") {
+            response.content_type = Some(ct.clone());
+        }
+        if let Some(Value::Object(headers)) = lock.get("_headers") {
+            let header_lock = headers.lock().unwrap();
+            let mut pairs: Vec<(String, String)> = header_lock
+                .iter()
+                .filter_map(|(k, v)| match v {
+                    Value::String(s) => Some((k.clone(), s.clone())),
+                    _ => None,
+                })
+                .collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            response.headers = pairs;
+        }
+        if let Some(Value::Array(cookies)) = lock.get("_cookies") {
+            let cookie_lock = cookies.lock().unwrap();
+            for cookie in cookie_lock.iter() {
+                if let Value::String(c) = cookie {
+                    response.headers.push(("set-cookie".to_string(), c.clone()));
+                }
+            }
+        }
+        response
+    }
+
+    /// Build the final axum response from this state and the rendered body.
+    pub fn into_axum(self, rendered: String) -> axum::response::Response {
+        use axum::http::header;
+        let status = self.status.unwrap_or(200);
+        let mut builder = axum::response::Response::builder().status(status);
+
+        if let Some(url) = &self.redirect {
+            builder = builder.header(header::LOCATION, url);
+        }
+        for (name, value) in &self.headers {
+            builder = builder.header(name.as_str(), value);
+        }
+        let has_content_type = self
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+        if !has_content_type && let Some(ct) = &self.content_type {
+            builder = builder.header(header::CONTENT_TYPE, ct);
+        }
+
+        let body = self.body.unwrap_or(rendered);
+        builder
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| axum::response::Response::default())
+    }
 }
 
 fn parse_method(attrs: &str) -> Method {
@@ -316,6 +426,31 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         env_mut.define("QUERY", query);
 
         env_mut.define("BODY", context.body.clone());
+
+        // Expose request headers (lower-cased names) as HEADER.<name>
+        let header_map: HashMap<String, Value> = context
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+        let headers = Value::Object(Arc::new(Mutex::new(header_map)));
+        env_mut.define("HEADER", headers);
+
+        // Parse the `cookie` request header into COOKIE.<name>
+        let cookie_map: HashMap<String, Value> = context
+            .headers
+            .get("cookie")
+            .map(|raw| {
+                raw.split(';')
+                    .filter_map(|part| {
+                        let (name, value) = part.trim().split_once('=')?;
+                        Some((name.to_string(), Value::String(value.to_string())))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cookies = Value::Object(Arc::new(Mutex::new(cookie_map)));
+        env_mut.define("COOKIE", cookies);
 
         // Define JSON.Parse / JSON.Stringify
         let json_parse = Value::Function(Function {
@@ -551,6 +686,225 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("console", console);
 
+        // Define RES: script-controlled status/headers/body/redirect.
+        // Methods write into a shared map that `process_src` reads afterwards.
+        let response_map = Arc::new(Mutex::new(HashMap::new()));
+
+        let response_set_status = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["status".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        match args.first() {
+                            Some(Value::Number(n)) if *n >= 100.0 && *n <= 599.0 => {
+                                map.lock()
+                                    .unwrap()
+                                    .insert("_status".to_string(), Value::Number(*n));
+                                Ok(Value::Null)
+                            }
+                            Some(other) => Ok(error_value(format!(
+                                "RES.SetStatus: expected a status code, got {}",
+                                other.type_name()
+                            ))),
+                            None => Ok(error_value("RES.SetStatus: expected a status code")),
+                        }
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response_set_header = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["name".to_string(), "value".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        match (args.first(), args.get(1)) {
+                            (Some(Value::String(name)), Some(Value::String(value))) => {
+                                let mut lock = map.lock().unwrap();
+                                let headers =
+                                    lock.entry("_headers".to_string()).or_insert_with(|| {
+                                        Value::Object(Arc::new(Mutex::new(HashMap::new())))
+                                    });
+                                if let Value::Object(h) = headers {
+                                    h.lock()
+                                        .unwrap()
+                                        .insert(name.clone(), Value::String(value.clone()));
+                                }
+                                Ok(Value::Null)
+                            }
+                            _ => Ok(error_value(
+                                "RES.SetHeader: expected (name, value) strings",
+                            )),
+                        }
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response_set_cookie = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["name".to_string(), "value".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        match (args.first(), args.get(1)) {
+                            (Some(Value::String(name)), Some(Value::String(value))) => {
+                                let opts = args.get(2).and_then(|v| match v {
+                                    Value::Object(o) => {
+                                        let lock = o.lock().unwrap();
+                                        let map: HashMap<String, Value> = lock.clone();
+                                        Some(map)
+                                    }
+                                    _ => None,
+                                });
+                                let mut parts = vec![format!("{name}={value}")];
+                                if let Some(opts) = opts {
+                                    if let Some(Value::String(p)) = opts.get("Path") {
+                                        parts.push(format!("Path={p}"));
+                                    }
+                                    if let Some(Value::String(m)) = opts.get("MaxAge") {
+                                        parts.push(format!("Max-Age={m}"));
+                                    }
+                                    if opts.get("HttpOnly").is_some_and(Value::is_truthy) {
+                                        parts.push("HttpOnly".to_string());
+                                    }
+                                    if opts.get("Secure").is_some_and(Value::is_truthy) {
+                                        parts.push("Secure".to_string());
+                                    }
+                                    if let Some(Value::String(s)) = opts.get("SameSite") {
+                                        parts.push(format!("SameSite={s}"));
+                                    }
+                                }
+                                let mut lock = map.lock().unwrap();
+                                let cookies = lock
+                                    .entry("_cookies".to_string())
+                                    .or_insert_with(|| Value::Array(Arc::new(Mutex::new(vec![]))));
+                                if let Value::Array(c) = cookies {
+                                    c.lock().unwrap().push(Value::String(parts.join("; ")));
+                                }
+                                Ok(Value::Null)
+                            }
+                            _ => Ok(error_value(
+                                "RES.SetCookie: expected (name, value) strings",
+                            )),
+                        }
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response_json = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["value".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        let Some(value) = args.first() else {
+                            return Ok(error_value("RES.Json: expected a value"));
+                        };
+                        match serde_json::to_string(&value_to_json(value)) {
+                            Ok(text) => {
+                                let mut lock = map.lock().unwrap();
+                                lock.insert("_body".to_string(), Value::String(text));
+                                lock.insert(
+                                    "_content_type".to_string(),
+                                    Value::String("application/json".to_string()),
+                                );
+                                Ok(Value::Null)
+                            }
+                            Err(e) => Ok(error_value(format!("RES.Json: {e}"))),
+                        }
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response_html = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["html".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        let html = match args.first() {
+                            Some(Value::String(s)) => s.clone(),
+                            Some(other) => {
+                                return Ok(error_value(format!(
+                                    "RES.Html: expected a string, got {}",
+                                    other.type_name()
+                                )));
+                            }
+                            None => {
+                                return Ok(error_value("RES.Html: expected a string"));
+                            }
+                        };
+                        let mut lock = map.lock().unwrap();
+                        lock.insert("_body".to_string(), Value::String(html));
+                        lock.insert(
+                            "_content_type".to_string(),
+                            Value::String("text/html".to_string()),
+                        );
+                        Ok(Value::Null)
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response_redirect = {
+            let map = response_map.clone();
+            Value::Function(Function {
+                params: vec!["url".to_string()],
+                body: FunctionBody::Native(Arc::new(move |args| {
+                    let map = map.clone();
+                    Box::pin(async move {
+                        let url = match args.first() {
+                            Some(Value::String(s)) => s.clone(),
+                            Some(other) => {
+                                return Ok(error_value(format!(
+                                    "RES.Redirect: expected a URL string, got {}",
+                                    other.type_name()
+                                )));
+                            }
+                            None => {
+                                return Ok(error_value("RES.Redirect: expected a URL string"));
+                            }
+                        };
+                        let mut lock = map.lock().unwrap();
+                        lock.insert("_redirect".to_string(), Value::String(url));
+                        if !lock.contains_key("_status") {
+                            lock.insert("_status".to_string(), Value::Number(302.0));
+                        }
+                        Ok(Value::Null)
+                    })
+                })),
+                captured: Env::new_root(),
+            })
+        };
+
+        let response = Value::Object(response_map.clone());
+        {
+            let mut map = response_map.lock().unwrap();
+            map.insert("SetStatus".to_string(), response_set_status);
+            map.insert("SetHeader".to_string(), response_set_header);
+            map.insert("SetCookie".to_string(), response_set_cookie);
+            map.insert("Json".to_string(), response_json);
+            map.insert("Html".to_string(), response_html);
+            map.insert("Redirect".to_string(), response_redirect);
+        }
+
+        env_mut.define("RES", response);
+
         // Define db
         let ping_conn = conn.clone();
         let ping = Value::Function(Function {
@@ -558,9 +912,10 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             body: FunctionBody::Native(Arc::new(move |_args| {
                 let conn = ping_conn.clone();
                 Box::pin(async move {
-                    let res = conn.ping().await;
-                    let text = res.unwrap(); // TODO: Once this is a call that can actually fail, replace this unwrap with { ok: false, error: msg }
-                    Ok(Value::String(text))
+                    match conn.ping().await {
+                        Ok(text) => Ok(Value::String(text)),
+                        Err(e) => Ok(error_value(format!("DB.Ping: {e}"))),
+                    }
                 })
             })),
             captured: Env::new_root(),
@@ -575,15 +930,13 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => {
-                            return Ok(Value::String(format!(
+                            return Ok(error_value(format!(
                                 "DB.Query: expected a SQL string, got {}",
                                 other.type_name()
                             )));
                         }
                         None => {
-                            return Ok(Value::String(
-                                "DB.Query: expected a SQL string".to_string(),
-                            ));
+                            return Ok(error_value("DB.Query: expected a SQL string"));
                         }
                     };
                     Ok(query_stmt_to_value(conn.query(&sql)))
@@ -601,13 +954,13 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let sql = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => {
-                            return Ok(Value::String(format!(
+                            return Ok(error_value(format!(
                                 "DB.Exec: expected a SQL string, got {}",
                                 other.type_name()
                             )));
                         }
                         None => {
-                            return Ok(Value::String("DB.Exec: expected a SQL string".to_string()));
+                            return Ok(error_value("DB.Exec: expected a SQL string"));
                         }
                     };
                     Ok(exec_stmt_to_value(conn.exec(&sql)))
@@ -625,15 +978,13 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let name = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => {
-                            return Ok(Value::String(format!(
+                            return Ok(error_value(format!(
                                 "DB.Table: expected a table name, got {}",
                                 other.type_name()
                             )));
                         }
                         None => {
-                            return Ok(Value::String(
-                                "DB.Table: expected a table name".to_string(),
-                            ));
+                            return Ok(error_value("DB.Table: expected a table name"));
                         }
                     };
                     Ok(table_stmt_to_value(conn.table(&name)))
@@ -799,9 +1150,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
                 let obj = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
                     None => {
-                        return Ok(Value::String(
-                            "TableStmt.Insert: expected an object".to_string(),
-                        ));
+                        return Ok(error_value("TableStmt.Insert: expected an object"));
                     }
                 };
                 Ok(exec_stmt_to_value(stmt.insert(&obj)))
@@ -819,9 +1168,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
                 let obj = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
                     None => {
-                        return Ok(Value::String(
-                            "TableStmt.Update: expected an object".to_string(),
-                        ));
+                        return Ok(error_value("TableStmt.Update: expected an object"));
                     }
                 };
                 Ok(exec_stmt_to_value(stmt.update(&obj)))
@@ -839,9 +1186,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
                 let conditions = match args.first().and_then(value_to_object) {
                     Some(obj) => obj,
                     None => {
-                        return Ok(Value::String(
-                            "TableStmt.Where: expected an object".to_string(),
-                        ));
+                        return Ok(error_value("TableStmt.Where: expected an object"));
                     }
                 };
                 Ok(table_stmt_to_value(stmt.where_(&conditions)))

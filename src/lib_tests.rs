@@ -33,6 +33,57 @@ fn temp_folder(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 #[tokio::test]
+async fn test_response_controls_http_status_and_redirect() {
+    let folder = temp_folder(
+        "response_controls",
+        &[
+            (
+                "gone.rhp",
+                "<rhp>RES.SetStatus(410)\nRES.Json({ ok: false })</rhp>",
+            ),
+            ("old.rhp", "<rhp>RES.Redirect('/new.rhp')</rhp>"),
+            ("new.rhp", "<h1>moved here</h1>"),
+            (
+                "cookie.rhp",
+                "<rhp>RES.SetCookie('sid', '1', { Path: '/' })</rhp>",
+            ),
+        ],
+    );
+    let conn = unique_conn().await;
+    let server = TestServer::new(build_router(folder, conn));
+
+    let gone = server.get("/gone.rhp").await;
+    gone.assert_status(axum::http::StatusCode::GONE);
+    assert_eq!(
+        gone.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/json"
+    );
+    gone.assert_text(r#"{"ok":false}"#);
+
+    let old = server.get("/old.rhp").await;
+    old.assert_status(axum::http::StatusCode::FOUND);
+    assert_eq!(
+        old.headers().get("location").unwrap().to_str().unwrap(),
+        "/new.rhp"
+    );
+
+    let cookie = server.get("/cookie.rhp").await;
+    assert_eq!(
+        cookie
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "sid=1; Path=/"
+    );
+}
+
+#[tokio::test]
 async fn test_index_rhp_visit_counter() {
     let src = std::fs::read_to_string("./public/index.rhp").unwrap();
     let folder = temp_folder(

@@ -102,16 +102,17 @@ impl Evaluator {
         match &stmt.node {
             RawStmt::Error => Ok(()), // already reported at parse time
 
-            RawStmt::VarDecl {
-                kind: _,
-                name,
-                init,
-            } => {
+            RawStmt::VarDecl { kind, name, init } => {
                 let value = match init {
                     Some(expr) => self.eval_expr(expr, env.clone()).await?,
                     None => Value::Null,
                 };
-                env.lock().unwrap().define(name, value.clone());
+                let mut env_guard = env.lock().unwrap();
+                match kind {
+                    VarKind::Const => env_guard.define_const(name, value.clone()),
+                    _ => env_guard.define(name, value.clone()),
+                }
+                drop(env_guard);
                 Err(Signal::Value(value))
             }
 
@@ -321,7 +322,11 @@ impl Evaluator {
         loop_env: &Arc<Mutex<Env>>,
         body: &[Stmt],
     ) -> Result<bool, Signal> {
-        loop_env.lock().unwrap().set(var, item);
+        loop_env
+            .lock()
+            .unwrap()
+            .set(var, item)
+            .map_err(|msg| Signal::Error(EvalError::new(msg, 0..0)))?;
         let iter_env = Env::new_child(loop_env.clone());
         match self.eval_block(body, iter_env).await {
             Ok(()) => Ok(true),
@@ -672,7 +677,10 @@ impl Evaluator {
     ) -> Result<(), Signal> {
         match &target.node {
             RawExpr::Ident(name) => {
-                env.lock().unwrap().set(name, value);
+                env.lock()
+                    .unwrap()
+                    .set(name, value)
+                    .map_err(|msg| Signal::Error(EvalError::new(msg, span.clone())))?;
                 Ok(())
             }
             RawExpr::Member { object, property } => {
@@ -1001,7 +1009,9 @@ fn method_error(msg: String) -> Value {
 }
 
 fn string_split(s: &Value, args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     let parts: Vec<Value> = match args.first() {
         None => s
             .split_whitespace()
@@ -1025,22 +1035,30 @@ fn string_split(s: &Value, args: &[Value]) -> Result<Value, String> {
 }
 
 fn string_trim(s: &Value, _args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     Ok(Value::String(s.trim().to_string()))
 }
 
 fn string_to_upper(s: &Value, _args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     Ok(Value::String(s.to_uppercase()))
 }
 
 fn string_to_lower(s: &Value, _args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     Ok(Value::String(s.to_lowercase()))
 }
 
 fn string_replace(s: &Value, args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     match args {
         [Value::String(from), Value::String(to)] => {
             Ok(Value::String(s.replace(from.as_str(), to.as_str())))
@@ -1050,7 +1068,9 @@ fn string_replace(s: &Value, args: &[Value]) -> Result<Value, String> {
 }
 
 fn string_contains(s: &Value, args: &[Value]) -> Result<Value, String> {
-    let Value::String(s) = s else { unreachable!("bound method receiver") };
+    let Value::String(s) = s else {
+        unreachable!("bound method receiver")
+    };
     match args {
         [Value::String(needle)] => Ok(Value::Bool(s.contains(needle.as_str()))),
         _ => Err("contains: expected a string argument".to_string()),
@@ -1058,7 +1078,9 @@ fn string_contains(s: &Value, args: &[Value]) -> Result<Value, String> {
 }
 
 fn array_push(a: &Value, args: &[Value]) -> Result<Value, String> {
-    let Value::Array(arr) = a else { unreachable!("bound method receiver") };
+    let Value::Array(arr) = a else {
+        unreachable!("bound method receiver")
+    };
     let Some(item) = args.first().cloned() else {
         return Err("push: expected an item".to_string());
     };
@@ -1068,7 +1090,9 @@ fn array_push(a: &Value, args: &[Value]) -> Result<Value, String> {
 }
 
 fn array_join(a: &Value, args: &[Value]) -> Result<Value, String> {
-    let Value::Array(arr) = a else { unreachable!("bound method receiver") };
+    let Value::Array(arr) = a else {
+        unreachable!("bound method receiver")
+    };
     let sep = match args.first() {
         None => ",".to_string(),
         Some(Value::String(s)) => s.clone(),

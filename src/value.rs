@@ -1,5 +1,5 @@
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -9,6 +9,7 @@ use crate::eval::EvalError;
 #[derive(Debug, Clone)]
 pub struct Env {
     vars: HashMap<String, Value>,
+    consts: HashSet<String>,
     parent: Option<Arc<Mutex<Env>>>,
 }
 
@@ -16,6 +17,7 @@ impl Env {
     pub fn new_root() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             vars: HashMap::new(),
+            consts: HashSet::new(),
             parent: None,
         }))
     }
@@ -23,6 +25,7 @@ impl Env {
     pub fn new_child(parent: Arc<Mutex<Env>>) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             vars: HashMap::new(),
+            consts: HashSet::new(),
             parent: Some(parent),
         }))
     }
@@ -34,25 +37,35 @@ impl Env {
         self.parent.as_ref()?.lock().unwrap().get(name)
     }
 
-    pub fn set(&mut self, name: &str, value: Value) {
+    pub fn set(&mut self, name: &str, value: Value) -> Result<(), String> {
         // Walk up to find where the variable lives, then update it there.
-        // If not found anywhere, set in current scope (for let/const/var decls).
+        // If not found anywhere, set in current scope (implicit global).
         if self.vars.contains_key(name) {
+            if self.consts.contains(name) {
+                return Err(format!("cannot assign to constant `{name}`"));
+            }
             self.vars.insert(name.to_string(), value);
-            return;
+            return Ok(());
         }
         if let Some(parent) = &self.parent
             && parent.lock().unwrap().has(name)
         {
-            parent.lock().unwrap().set(name, value);
-            return;
+            return parent.lock().unwrap().set(name, value);
         }
         self.vars.insert(name.to_string(), value);
+        Ok(())
     }
 
     pub fn define(&mut self, name: &str, value: Value) {
-        // Always defines in the current scope (for let/const/var declarations)
+        // Always defines in the current scope (for let/var declarations)
         self.vars.insert(name.to_string(), value);
+        self.consts.remove(name);
+    }
+
+    pub fn define_const(&mut self, name: &str, value: Value) {
+        // Defines a constant: assigning to it later is an error.
+        self.vars.insert(name.to_string(), value);
+        self.consts.insert(name.to_string());
     }
 
     fn has(&self, name: &str) -> bool {

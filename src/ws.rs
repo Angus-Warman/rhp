@@ -490,6 +490,7 @@ pub async fn run_socket(
     let context = Context {
         method: Method::Socket,
         query,
+        headers: HashMap::new(),
         body: Value::Object(Arc::new(Mutex::new(HashMap::new()))),
         socket: Some(SocketRef {
             registry: registry.clone(),

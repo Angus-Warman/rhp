@@ -24,6 +24,7 @@ fn ctx(method: Method) -> Context {
     Context {
         method,
         query: HashMap::new(),
+        headers: HashMap::new(),
         body: empty_object(),
         socket: None,
     }
@@ -143,15 +144,21 @@ async fn test_console_log() {
 async fn test_method_filtered_sections() {
     let src = r#"<rhp method="PUT">return "put"</rhp><rhp method="POST">return "post"</rhp>"#;
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Post), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Post), test_conn().await)
+            .await
+            .0,
         "post"
     );
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Put), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Put), test_conn().await)
+            .await
+            .0,
         "put"
     );
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Get), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Get), test_conn().await)
+            .await
+            .0,
         ""
     );
 }
@@ -160,11 +167,15 @@ async fn test_method_filtered_sections() {
 async fn test_unfiltered_section_runs_all_methods() {
     let src = r#"<rhp>return "always"</rhp>"#;
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Get), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Get), test_conn().await)
+            .await
+            .0,
         "always"
     );
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Post), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Post), test_conn().await)
+            .await
+            .0,
         "always"
     );
 }
@@ -530,6 +541,45 @@ async fn test_try_var_decl_returns_value() {
 }
 
 #[tokio::test]
+async fn test_const_enforcement() {
+    async fn eval(src: &str) -> Result<String, String> {
+        let env = setup_env(&Context::default(), test_conn().await);
+        let tokens = lexer::lex_code(src).unwrap();
+        let (stmts, _) = Parser::parse(tokens, src);
+        let mut ev = Evaluator::new();
+        match ev.eval_stmts(&stmts, env).await {
+            Ok(()) => Ok(ev.output),
+            Err(e) => Err(e.message),
+        }
+    }
+
+    // Assigning to a const errors.
+    let err = eval("const x = 1\nx = 2").await.unwrap_err();
+    assert!(err.contains("constant"), "got: {err}");
+
+    // Assigning to a const in an enclosing scope errors too.
+    assert!(eval("const x = 1\nif (true) { x = 2 }").await.is_err());
+
+    // let can be reassigned.
+    assert_eq!(
+        eval("let x = 1\nx = 2\nreturn x").await,
+        Ok("2".to_string())
+    );
+
+    // Mutating the contents of a const value is still allowed.
+    assert_eq!(
+        eval("const a = [1]\nlet n = a.push(2)\nreturn n + ':' + a.join('-')").await,
+        Ok("2:1-2".to_string())
+    );
+
+    // A const declared with `let` again in a child scope shadows, not errors.
+    assert_eq!(
+        eval("const x = 1\nif (true) { let x = 2 }\nreturn x").await,
+        Ok("1".to_string())
+    );
+}
+
+#[tokio::test]
 async fn test_worked_try_bubbles_errors() {
     // A signup pipeline where every step returns `{ ok: true, ... }` on
     // success or `{ ok: false, error: msg }` on failure. Each `try` returns
@@ -795,11 +845,31 @@ async fn test_db_table_insert_bad_args() {
         test_process(
             r#"
         DB.Exec("CREATE TABLE users (id INTEGER)").Run()
-        return DB.Table("users").Insert("nope")
+        let res = DB.Table("users").Insert("nope")
+        if (!res.ok && res.error == "TableStmt.Insert: expected an object") { return "error object" }
+        return "fail"
     "#
         )
         .await,
-        "TableStmt.Insert: expected an object"
+        "error object"
+    );
+}
+
+#[tokio::test]
+async fn test_db_bad_args_return_error_objects() {
+    assert_eq!(
+        test_process(
+            r#"
+        let a = DB.Query(42)
+        let b = DB.Exec()
+        let c = DB.Table(42)
+        let d = DB.Table("users").Update("nope")
+        let e = DB.Table("users").Where(7)
+        return a.ok + ':' + b.ok + ':' + c.ok + ':' + d.ok + ':' + e.ok
+    "#
+        )
+        .await,
+        "false:false:false:false:false"
     );
 }
 
@@ -1363,13 +1433,120 @@ async fn test_comments_and_string_escapes() {
 }
 
 #[tokio::test]
+async fn test_response_object() {
+    // Status + JSON body + content type.
+    let (_html, response) = process_src(
+        r#"<rhp>
+        RES.SetStatus(404)
+        RES.Json({ error: "nope" })
+        return "ignored"
+    </rhp>"#
+            .to_string(),
+        ctx(Method::Get),
+        test_conn().await,
+    )
+    .await;
+    assert_eq!(response.status, Some(404));
+    assert_eq!(response.body.as_deref(), Some(r#"{"error":"nope"}"#));
+    assert_eq!(response.content_type.as_deref(), Some("application/json"));
+    assert_eq!(response.redirect, None);
+
+    // Redirect sets a default 302 and a Location header; later sections stop.
+    let (_, response) = process_src(
+        r#"<rhp method="GET">
+        RES.Redirect("/login")
+    </rhp>
+    <rhp method="GET">return "unreached"</rhp>"#
+            .to_string(),
+        ctx(Method::Get),
+        test_conn().await,
+    )
+    .await;
+    assert_eq!(response.redirect.as_deref(), Some("/login"));
+    assert_eq!(response.status, Some(302));
+
+    // Custom status + redirect.
+    let (_, response) = process_src(
+        r#"<rhp>
+        RES.SetStatus(301)
+        RES.Redirect("/moved")
+    </rhp>"#
+            .to_string(),
+        ctx(Method::Get),
+        test_conn().await,
+    )
+    .await;
+    assert_eq!(response.status, Some(301));
+
+    // SetCookie produces a set-cookie header.
+    let (_, response) = process_src(
+        r#"<rhp>
+        RES.SetCookie("session", "abc123", { Path: "/", HttpOnly: true, SameSite: "Lax" })
+    </rhp>"#
+            .to_string(),
+        ctx(Method::Get),
+        test_conn().await,
+    )
+    .await;
+    assert_eq!(
+        response.headers,
+        vec![(
+            "set-cookie".to_string(),
+            "session=abc123; Path=/; HttpOnly; SameSite=Lax".to_string()
+        )]
+    );
+
+    // SetHeader + bad args.
+    let (_, response) = process_src(
+        r#"<rhp>
+        RES.SetHeader("X-Powered-By", "rhp")
+        let bad = RES.SetStatus("nope")
+    </rhp>"#
+            .to_string(),
+        ctx(Method::Get),
+        test_conn().await,
+    )
+    .await;
+    assert_eq!(
+        response.headers,
+        vec![("X-Powered-By".to_string(), "rhp".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn test_cookie_and_header_globals() {
+    let context = Context {
+        headers: {
+            let mut map = HashMap::new();
+            map.insert("cookie".to_string(), "session=abc; theme=dark".to_string());
+            map.insert("user-agent".to_string(), "test-agent".to_string());
+            map
+        },
+        ..ctx(Method::Get)
+    };
+    let env = setup_env(&context, test_conn().await);
+    assert_eq!(
+        process_script_section(env, r#"return COOKIE.session + ':' + COOKIE.theme"#).await,
+        "abc:dark"
+    );
+
+    let env = setup_env(&context, test_conn().await);
+    assert_eq!(
+        process_script_section(env, r#"return HEADER["user-agent"]"#).await,
+        "test-agent"
+    );
+}
+
+#[tokio::test]
 async fn test_html_block() {
     // Raw HTML outside the <rhp> block passes through untouched; code inside
     // the block runs and renders into the output.
     let src = r#"<header>Site</header><rhp>let n = 2
 return <p>{n}</p></rhp><footer>bye</footer>"#;
     assert_eq!(
-        process_src(src.to_string(), ctx(Method::Get), test_conn().await).await,
+        process_src(src.to_string(), ctx(Method::Get), test_conn().await)
+            .await
+            .0,
         "<header>Site</header><p>2</p><footer>bye</footer>"
     );
 }
@@ -1501,10 +1678,8 @@ async fn test_math_intrinsics() {
         "3:2"
     );
     assert_eq!(
-        test_process(
-            r#"return MATH.Sum(1, 2, 3) + ':' + MATH.Sum([1, 2, 3]) + ':' + MATH.Sum()"#
-        )
-        .await,
+        test_process(r#"return MATH.Sum(1, 2, 3) + ':' + MATH.Sum([1, 2, 3]) + ':' + MATH.Sum()"#)
+            .await,
         "6:6:0"
     );
     assert_eq!(
