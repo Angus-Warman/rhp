@@ -331,9 +331,8 @@ impl<'a> Parser<'a> {
 
     fn parse_try(&mut self) -> Result<RawStmt, ParseError> {
         self.advance(); // eat 'try'
-        let value = self.parse_expr()?;
-        self.eat(&Token::Semicolon);
-        Ok(RawStmt::Try(value))
+        let stmt = self.parse_stmt();
+        Ok(RawStmt::Try(Box::new(stmt)))
     }
 
     fn parse_expr_stmt(&mut self) -> Result<RawStmt, ParseError> {

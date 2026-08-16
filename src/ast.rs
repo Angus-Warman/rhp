@@ -197,7 +197,8 @@ pub enum RawStmt {
     },
 
     Return(Option<Expr>),
-    Try(Expr),
+    // `try <stmt>` — runs stmt; if its value is falsy, returns it early.
+    Try(Box<Stmt>),
     Break,
     Continue,
 

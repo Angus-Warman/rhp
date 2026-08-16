@@ -35,6 +35,9 @@ impl std::fmt::Display for EvalError {
 #[derive(Debug)]
 enum Signal {
     Return(Value),
+    // A statement evaluated to a value (e.g. `let x = 1`); only `try`
+    // consumes it, everywhere else it's discarded.
+    Value(Value),
     Break,
     Continue,
     Error(EvalError),
@@ -79,6 +82,7 @@ impl Evaluator {
                         self.returned = Some(value);
                         return Ok(());
                     }
+                    Signal::Value(_) => {}
                     Signal::Break => {
                         return Err(EvalError::new("break outside loop", stmt.span.clone()));
                     }
@@ -107,8 +111,8 @@ impl Evaluator {
                     Some(expr) => self.eval_expr(expr, env.clone()).await?,
                     None => Value::Null,
                 };
-                env.lock().unwrap().define(name, value);
-                Ok(())
+                env.lock().unwrap().define(name, value.clone());
+                Err(Signal::Value(value))
             }
 
             RawStmt::FunctionDecl { name, params, body } => {
@@ -163,7 +167,11 @@ impl Evaluator {
                 let loop_env = Env::new_child(env.clone());
 
                 if let Some(init_stmt) = init {
-                    self.eval_stmt(init_stmt, loop_env.clone()).await?;
+                    match self.eval_stmt(init_stmt, loop_env.clone()).await {
+                        Ok(()) => {}
+                        Err(Signal::Value(_)) => {} // init value discarded
+                        Err(e) => return Err(e),
+                    }
                 }
 
                 loop {
@@ -274,25 +282,31 @@ impl Evaluator {
             RawStmt::Continue => Err(Signal::Continue),
 
             RawStmt::Expr(expr) => {
-                self.eval_expr(expr, env).await?;
-                Ok(())
-            }
-            RawStmt::Try(expr) => {
                 let value = self.eval_expr(expr, env).await?;
-
-                if value.is_truthy() {
-                    Ok(())
-                } else {
-                    Err(Signal::Return(value))
-                }
+                Err(Signal::Value(value))
             }
+            RawStmt::Try(stmt) => match self.eval_stmt(stmt, env.clone()).await {
+                Ok(()) => Ok(()),
+                Err(Signal::Value(value)) => {
+                    if value.is_truthy() {
+                        Ok(())
+                    } else {
+                        Err(Signal::Return(value))
+                    }
+                }
+                Err(signal) => Err(signal),
+            },
         }
     }
 
     #[async_recursion]
     async fn eval_block(&mut self, stmts: &[Stmt], env: Arc<Mutex<Env>>) -> StmtResult {
         for stmt in stmts {
-            self.eval_stmt(stmt, env.clone()).await?;
+            match self.eval_stmt(stmt, env.clone()).await {
+                Ok(()) => {}
+                Err(Signal::Value(_)) => {} // statement value discarded here
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }

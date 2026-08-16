@@ -317,28 +317,45 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("BODY", context.body.clone());
 
-        // Define JSON.Parse
-        let parse_json = Value::Function(Function {
+        // Define JSON.Parse / JSON.Stringify
+        let json_parse = Value::Function(Function {
             params: vec!["text".to_string()],
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
                     let text = match args.first() {
                         Some(Value::String(s)) => s.clone(),
                         Some(other) => {
-                            return Ok(Value::String(format!(
+                            return Ok(error_value(format!(
                                 "JSON.Parse: expected a JSON string, got {}",
                                 other.type_name()
                             )));
                         }
                         None => {
-                            return Ok(Value::String(
-                                "JSON.Parse: expected a JSON string".to_string(),
-                            ));
+                            return Ok(error_value("JSON.Parse: expected a JSON string"));
                         }
                     };
                     match serde_json::from_str::<serde_json::Value>(&text) {
                         Ok(json) => Ok(json_to_value(json)),
-                        Err(_) => Ok(Value::Null),
+                        Err(e) => Ok(error_value(format!("JSON.Parse: {}", e))),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let json_stringify = Value::Function(Function {
+            params: vec!["value".to_string()],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    let value = match args.first() {
+                        Some(v) => v.clone(),
+                        None => {
+                            return Ok(error_value("JSON.Stringify: expected a value"));
+                        }
+                    };
+                    match serde_json::to_string(&value_to_json(&value)) {
+                        Ok(text) => Ok(Value::String(text)),
+                        Err(e) => Ok(error_value(format!("JSON.Stringify: {}", e))),
                     }
                 })
             })),
@@ -347,7 +364,8 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         let json = Value::Object(Arc::new(Mutex::new({
             let mut map = HashMap::new();
-            map.insert("Parse".to_string(), parse_json);
+            map.insert("Parse".to_string(), json_parse);
+            map.insert("Stringify".to_string(), json_stringify);
             map
         })));
 
@@ -713,13 +731,26 @@ fn value_to_object(v: &Value) -> Option<serde_json::Map<String, serde_json::Valu
     }
 }
 
+fn error_value(msg: impl Into<String>) -> Value {
+    let mut map = HashMap::new();
+    map.insert("ok".to_string(), Value::Bool(false));
+    map.insert("error".to_string(), Value::String(msg.into()));
+    Value::Object(Arc::new(Mutex::new(map)))
+}
+
 pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => serde_json::Number::from_f64(*n)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
+        Value::Number(n) => {
+            if n.fract() == 0.0 && n.abs() < 1e15 {
+                serde_json::Value::Number(serde_json::Number::from(*n as i64))
+            } else {
+                serde_json::Number::from_f64(*n)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+        }
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Array(a) => {
             serde_json::Value::Array(a.lock().unwrap().iter().map(value_to_json).collect())

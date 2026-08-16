@@ -251,7 +251,7 @@
     }
 
     SOCKET.Client().OnMessage(raw => {
-        let m = JSON.Parse(raw)
+        try let m = JSON.Parse(raw)
         DB.Table("messages").Insert({ room: room, body: raw }).Run()
         let html = <div class="message"><span class="sender">{m.name}</span><span class="text">{m.text}</span></div>
         SOCKET.Everyone().Send({ html: html, from: SOCKET.Client().Id() })

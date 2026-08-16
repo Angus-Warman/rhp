@@ -61,11 +61,41 @@ async fn test_json_parse() {
         .await,
         "alice:hi"
     );
-    assert_eq!(test_process("return JSON.Parse('not json')").await, "null");
+    // Invalid input returns { ok: false, error: msg }
     assert_eq!(
-        test_process("return JSON.Parse(42)").await,
-        "JSON.Parse: expected a JSON string, got number"
+        test_process(
+            r#"
+        let r = JSON.Parse('not json')
+        return r.ok + ':' + (r.error != '')
+    "#
+        )
+        .await,
+        "false:true"
     );
+    assert_eq!(test_process("return JSON.Parse(42).ok").await, "false");
+    assert_eq!(test_process("return JSON.Parse().ok").await, "false");
+}
+
+#[tokio::test]
+async fn test_json_stringify() {
+    assert_eq!(test_process(r#"return JSON.Stringify(null)"#).await, "null");
+    assert_eq!(test_process(r#"return JSON.Stringify(2.5)"#).await, "2.5");
+    assert_eq!(
+        test_process(r#"return JSON.Stringify([1, "a"])"#).await,
+        r#"[1,"a"]"#
+    );
+    // Round trip: Stringify then Parse
+    assert_eq!(
+        test_process(
+            r#"
+        let m = JSON.Parse(JSON.Stringify({ a: 1, b: "x" }))
+        return m.a + ':' + m.b
+    "#
+        )
+        .await,
+        "1:x"
+    );
+    assert_eq!(test_process("return JSON.Stringify().ok").await, "false");
 }
 
 #[tokio::test]
@@ -457,6 +487,45 @@ async fn test_try_syntax() {
         )
         .await,
         "{ b: 1, error: \"oh no\" }"
+    );
+}
+
+#[tokio::test]
+async fn test_try_var_decl_returns_value() {
+    // Truthy assignment: the variable is defined and execution continues.
+    assert_eq!(
+        test_process(
+            r#"
+        try let m = JSON.Parse('{"name":"alice","text":"hi"}')
+        return 'ok:' + m.name
+    "#
+        )
+        .await,
+        "ok:alice"
+    );
+
+    // Falsy value: `let x = 0` returns 0 → try early-returns it.
+    assert_eq!(
+        test_process(
+            r"
+        try let x = 0
+        return 'unreached'
+    "
+        )
+        .await,
+        "0"
+    );
+
+    // Failing JSON.Parse returns { ok: false } → try early-returns the error.
+    assert_eq!(
+        test_process(
+            r#"
+        try let m = JSON.Parse('not json')
+        return 'unreached'
+    "#
+        )
+        .await,
+        "{ error: \"JSON.Parse: expected ident at line 1 column 2\", ok: false }"
     );
 }
 
