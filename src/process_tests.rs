@@ -104,13 +104,13 @@ async fn test_pass_function() {
     assert_eq!(
         test_process(
             r"
-        let inc = (a) => a + 1
+        let inc = (a) => a * 2
         let apply_twice = (f, n) => f(f(n))
-        return apply_twice(inc, 2) 
+        return apply_twice(inc, 3) 
     "
         )
         .await,
-        "4"
+        "12"
     );
 }
 
@@ -577,6 +577,39 @@ async fn test_const_enforcement() {
         eval("const x = 1\nif (true) { let x = 2 }\nreturn x").await,
         Ok("1".to_string())
     );
+}
+
+#[tokio::test]
+async fn test_typeof_operator() {
+    assert_eq!(
+        test_process(
+            r#"
+        let a_string = "hi"
+        let an_int = 42
+        let a_float = 42.0
+        let a_bool = true
+        let a_null = null
+        let an_array = [1, 2]
+        let an_object = { x: 1 }
+        let a_function = () => 1
+        return [typeof a_string, typeof an_int, typeof a_float, typeof a_bool, typeof a_null, typeof an_array, typeof an_object, typeof a_function].join(":")
+    "#
+        )
+        .await,
+        "string:number:number:bool:null:array:object:function"
+    );
+
+    // typeof binds its argument; `!typeof x` works.
+    assert_eq!(test_process(r#"return !typeof "x""#).await, "false");
+
+    // `.type` property on non-object values.
+    assert_eq!(
+        test_process(r#"return "hi".type + ':' + (42).type + ':' + [1].type"#).await,
+        "string:number:array"
+    );
+
+    // Objects keep their own `type` field.
+    assert_eq!(test_process(r#"return { type: "person" }.type"#).await, "person");
 }
 
 #[tokio::test]
@@ -1739,5 +1772,120 @@ async fn test_array_methods() {
     assert_eq!(
         test_process(r#"return [1, 2, 3].length + ':' + [1, 2, 3].join()"#).await,
         "3:1,2,3"
+    );
+}
+
+#[tokio::test]
+async fn test_array_map_filter_reduce() {
+    assert_eq!(
+        test_process(
+            r#"
+        let doubled = [1, 2, 3].map(n => n * 2)
+        return doubled.join(',')
+    "#
+        )
+        .await,
+        "2,4,6"
+    );
+    assert_eq!(
+        test_process(
+            r#"
+        let evens = [1, 2, 3, 4].filter(n => n % 2 == 0)
+        return evens.join(',')
+    "#
+        )
+        .await,
+        "2,4"
+    );
+    assert_eq!(
+        test_process(
+            r#"
+        let sum = [1, 2, 3, 4].reduce((acc, n) => acc + n, 0)
+        return sum
+    "#
+        )
+        .await,
+        "10"
+    );
+    // reduce without an initial value seeds from the first element.
+    assert_eq!(
+        test_process(r#"return [1, 2, 3].reduce((acc, n) => acc + n)"#).await,
+        "6"
+    );
+    // Callbacks receive the index.
+    assert_eq!(
+        test_process(
+            r#"
+        let labeled = ["a", "b"].map((item, i) => item + i)
+        return labeled.join(',')
+    "#
+        )
+        .await,
+        "a0,b1"
+    );
+}
+
+#[tokio::test]
+async fn test_array_sort_slice_indexof() {
+    assert_eq!(
+        test_process(r#"return [3, 1, 2].sort().join(',')"#).await,
+        "1,2,3"
+    );
+    assert_eq!(
+        test_process(
+            r#"
+        let by_len = ["bb", "a", "ccc"].sort((a, b) => a.length - b.length)
+        return by_len.join(',')
+    "#
+        )
+        .await,
+        "a,bb,ccc"
+    );
+    // sort mutates the original array.
+    assert_eq!(
+        test_process(
+            r#"
+        let a = [3, 1, 2]
+        let b = a.sort()
+        return a.join(',') + ':' + b.join(',')
+    "#
+        )
+        .await,
+        "1,2,3:1,2,3"
+    );
+    assert_eq!(
+        test_process(r#"return [1, 2, 3, 4].slice(1, 3).join(',')"#).await,
+        "2,3"
+    );
+    assert_eq!(
+        test_process(r#"return [1, 2, 3, 4].slice(-2).join(',')"#).await,
+        "3,4"
+    );
+    assert_eq!(
+        test_process(r#"return [10, 20, 30].indexOf(20) + ':' + [10, 20, 30].indexOf(99)"#).await,
+        "1:-1"
+    );
+    assert_eq!(
+        test_process(r#"return [1, 2].includes(2) + ':' + [1, 2].includes(3)"#).await,
+        "true:false"
+    );
+    assert_eq!(
+        test_process(r#"return [1, 2].map("nope").ok"#).await,
+        "false"
+    );
+}
+
+#[tokio::test]
+async fn test_array_for_each() {
+    assert_eq!(
+        test_process(
+            r#"
+        let total = 0
+        let r = [1, 2, 3].forEach(n => total = total + n)
+        return total
+    "#
+        )
+        .await,
+        "6"
     );
 }

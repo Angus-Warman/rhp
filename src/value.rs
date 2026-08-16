@@ -105,7 +105,7 @@ pub enum FunctionBody {
     Native(NativeFn),
 }
 
-type NativeFn = Arc<
+pub(crate) type NativeFn = Arc<
     dyn Fn(Vec<Value>) -> Pin<Box<dyn Future<Output = Result<Value, EvalError>> + Send>>
         + Send
         + Sync,

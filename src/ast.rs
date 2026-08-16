@@ -112,6 +112,7 @@ pub enum ArrowBody {
 pub enum PrefixOp {
     Neg,
     Not,
+    Typeof,
     PlusPlus,
     MinusMinus,
 }

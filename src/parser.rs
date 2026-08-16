@@ -463,6 +463,7 @@ impl<'a> Parser<'a> {
         let prefix = match self.peek() {
             Some(Token::Not) => Some(PrefixOp::Not),
             Some(Token::Minus) => Some(PrefixOp::Neg),
+            Some(Token::Typeof) => Some(PrefixOp::Typeof),
             Some(Token::PlusPlus) => Some(PrefixOp::PlusPlus),
             Some(Token::MinusMinus) => Some(PrefixOp::MinusMinus),
             _ => None,

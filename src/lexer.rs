@@ -74,6 +74,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("typeof")]
+    Typeof,
 
     // --- Identifiers ---
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]

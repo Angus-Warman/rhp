@@ -512,6 +512,10 @@ impl Evaluator {
                     ))),
                 }
             }
+            PrefixOp::Typeof => {
+                let v = self.eval_expr(expr, env).await?;
+                Ok(Value::String(v.type_name().to_string()))
+            }
             PrefixOp::PlusPlus | PrefixOp::MinusMinus => {
                 let delta: f64 = if matches!(op, PrefixOp::PlusPlus) {
                     1.0
@@ -738,6 +742,13 @@ impl Evaluator {
         property: &str,
         span: &std::ops::Range<usize>,
     ) -> EvalResult {
+        // `x.type` reports the runtime type for any non-object value. Objects
+        // keep their own `type` field (e.g. `{ type: "person" }`).
+        if property == "type"
+            && !matches!(obj, Value::Object(_) | Value::Function(_))
+        {
+            return Ok(Value::String(obj.type_name().to_string()));
+        }
         match obj {
             Value::Object(map) => Ok(map
                 .lock()
@@ -855,7 +866,7 @@ impl Evaluator {
         call_env: &Arc<Mutex<Env>>,
         span: &std::ops::Range<usize>,
     ) -> Result<(), Signal> {
-        if args.len() != params.len() {
+        if args.len() < params.len() {
             return Err(Signal::Error(EvalError::new(
                 format!("expected {} arguments, got {}", params.len(), args.len()),
                 span.clone(),
@@ -970,11 +981,33 @@ fn escape_html(input: &str) -> String {
     out
 }
 
-// ---- Value methods (x.split(" "), x.trim(), ...) ----
+// ---- Value methods (x.split(" "), x.trim(), x.map(...), ...) ----
 
 type MethodImpl = fn(&Value, &[Value]) -> Result<Value, String>;
 
 fn bind_method(receiver: Value, name: &str) -> Option<Value> {
+    // Callback-taking array methods are async (they await script functions).
+    let f: Option<NativeFn> = match &receiver {
+        Value::Array(arr) => match name {
+            "map" => Some(array_map(arr.clone())),
+            "filter" => Some(array_filter(arr.clone())),
+            "forEach" => Some(array_for_each(arr.clone())),
+            "reduce" => Some(array_reduce(arr.clone())),
+            "sort" => Some(array_sort(arr.clone())),
+            _ => sync_method(receiver, name),
+        },
+        _ => sync_method(receiver, name),
+    };
+    f.map(|f| {
+        Value::Function(Function {
+            params: vec![],
+            body: FunctionBody::Native(f),
+            captured: Env::new_root(),
+        })
+    })
+}
+
+fn sync_method(receiver: Value, name: &str) -> Option<NativeFn> {
     let f: MethodImpl = match (&receiver, name) {
         (Value::String(_), "split") => string_split,
         (Value::String(_), "trim") => string_trim,
@@ -984,20 +1017,19 @@ fn bind_method(receiver: Value, name: &str) -> Option<Value> {
         (Value::String(_), "contains") => string_contains,
         (Value::Array(_), "push") => array_push,
         (Value::Array(_), "join") => array_join,
+        (Value::Array(_), "slice") => array_slice,
+        (Value::Array(_), "indexOf") => array_index_of,
+        (Value::Array(_), "includes") => array_includes,
         _ => return None,
     };
-    Some(Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new(move |args| {
-            let receiver = receiver.clone();
-            Box::pin(async move {
-                match f(&receiver, &args) {
-                    Ok(v) => Ok(v),
-                    Err(msg) => Ok(method_error(msg)),
-                }
-            })
-        })),
-        captured: Env::new_root(),
+    Some(Arc::new(move |args| {
+        let receiver = receiver.clone();
+        Box::pin(async move {
+            match f(&receiver, &args) {
+                Ok(v) => Ok(v),
+                Err(msg) => Ok(method_error(msg)),
+            }
+        })
     }))
 }
 
@@ -1110,4 +1142,217 @@ fn array_join(a: &Value, args: &[Value]) -> Result<Value, String> {
         .collect::<Vec<String>>()
         .join(&sep);
     Ok(Value::String(joined))
+}
+
+fn array_slice(a: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(arr) = a else {
+        unreachable!("bound method receiver")
+    };
+    let items = arr.lock().unwrap().clone();
+    let n = items.len() as i64;
+    let idx = |arg: Option<&Value>| -> Result<i64, String> {
+        match arg {
+            None => Ok(n),
+            Some(Value::Number(x)) => {
+                let mut i = x.round() as i64;
+                if i < 0 {
+                    i += n;
+                }
+                Ok(i.max(0).min(n))
+            }
+            Some(other) => Err(format!(
+                "slice: expected number indices, got {}",
+                other.type_name()
+            )),
+        }
+    };
+    let start = idx(args.first())?;
+    let end = idx(args.get(1))?;
+    let end = end.max(start);
+    Ok(Value::Array(Arc::new(Mutex::new(
+        items[start as usize..end as usize].to_vec(),
+    ))))
+}
+
+fn array_index_of(a: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(arr) = a else {
+        unreachable!("bound method receiver")
+    };
+    let Some(target) = args.first() else {
+        return Ok(Value::Number(-1.0));
+    };
+    let from = match args.get(1) {
+        Some(Value::Number(n)) => n.round().max(0.0) as usize,
+        Some(other) => {
+            return Err(format!(
+                "indexOf: expected a number fromIndex, got {}",
+                other.type_name()
+            ));
+        }
+        None => 0,
+    };
+    let lock = arr.lock().unwrap();
+    for (i, item) in lock.iter().enumerate().skip(from) {
+        if item == target {
+            return Ok(Value::Number(i as f64));
+        }
+    }
+    Ok(Value::Number(-1.0))
+}
+
+fn array_includes(a: &Value, args: &[Value]) -> Result<Value, String> {
+    let Value::Array(arr) = a else {
+        unreachable!("bound method receiver")
+    };
+    let Some(target) = args.first() else {
+        return Ok(Value::Bool(false));
+    };
+    Ok(Value::Bool(arr.lock().unwrap().iter().any(|item| item == target)))
+}
+
+// ---- Callback-taking array methods (await script functions) ----
+
+fn array_map(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
+    Arc::new(move |args| {
+        let arr = arr.clone();
+        Box::pin(async move {
+            let Some(cb) = args.first().cloned() else {
+                return Ok(method_error("map: expected a function".to_string()));
+            };
+            let items = arr.lock().unwrap().clone();
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.into_iter().enumerate() {
+                match call_value(cb.clone(), vec![item, Value::Number(i as f64)]).await {
+                    Ok(v) => out.push(v),
+                    Err(e) => return Ok(method_error(format!("map: {e}"))),
+                }
+            }
+            Ok(Value::Array(Arc::new(Mutex::new(out))))
+        })
+    })
+}
+
+fn array_filter(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
+    Arc::new(move |args| {
+        let arr = arr.clone();
+        Box::pin(async move {
+            let Some(cb) = args.first().cloned() else {
+                return Ok(method_error("filter: expected a function".to_string()));
+            };
+            let items = arr.lock().unwrap().clone();
+            let mut out = Vec::new();
+            for (i, item) in items.into_iter().enumerate() {
+                match call_value(cb.clone(), vec![item.clone(), Value::Number(i as f64)]).await {
+                    Ok(v) if v.is_truthy() => out.push(item),
+                    Ok(_) => {}
+                    Err(e) => return Ok(method_error(format!("filter: {e}"))),
+                }
+            }
+            Ok(Value::Array(Arc::new(Mutex::new(out))))
+        })
+    })
+}
+
+fn array_for_each(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
+    Arc::new(move |args| {
+        let arr = arr.clone();
+        Box::pin(async move {
+            let Some(cb) = args.first().cloned() else {
+                return Ok(method_error("forEach: expected a function".to_string()));
+            };
+            let items = arr.lock().unwrap().clone();
+            for (i, item) in items.into_iter().enumerate() {
+                if let Err(e) = call_value(cb.clone(), vec![item, Value::Number(i as f64)]).await {
+                    return Ok(method_error(format!("forEach: {e}")));
+                }
+            }
+            Ok(Value::Null)
+        })
+    })
+}
+
+fn array_reduce(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
+    Arc::new(move |args| {
+        let arr = arr.clone();
+        Box::pin(async move {
+            let Some(cb) = args.first().cloned() else {
+                return Ok(method_error("reduce: expected a function".to_string()));
+            };
+            let items = arr.lock().unwrap().clone();
+            let (mut acc, start) = match args.get(1) {
+                Some(init) => (init.clone(), 0),
+                None => match items.first() {
+                    Some(first) => (first.clone(), 1),
+                    None => {
+                        return Ok(method_error(
+                            "reduce: empty array with no initial value".to_string(),
+                        ));
+                    }
+                },
+            };
+            for i in start..items.len() {
+                match call_value(
+                    cb.clone(),
+                    vec![acc, items[i].clone(), Value::Number(i as f64)],
+                )
+                .await
+                {
+                    Ok(v) => acc = v,
+                    Err(e) => return Ok(method_error(format!("reduce: {e}"))),
+                }
+            }
+            Ok(acc)
+        })
+    })
+}
+
+fn array_sort(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
+    Arc::new(move |args| {
+        let arr = arr.clone();
+        Box::pin(async move {
+            let mut items = arr.lock().unwrap().clone();
+            match args.first() {
+                Some(Value::Function(cb)) => {
+                    // Insertion sort so the async comparator can be awaited.
+                    for i in 1..items.len() {
+                        let mut j = i;
+                        while j > 0 {
+                            let cmp = match call_value(
+                                Value::Function(cb.clone()),
+                                vec![items[j].clone(), items[j - 1].clone()],
+                            )
+                            .await
+                            {
+                                Ok(Value::Number(n)) => n,
+                                Ok(_) => 0.0,
+                                Err(e) => return Ok(method_error(format!("sort: {e}"))),
+                            };
+                            if cmp < 0.0 {
+                                items.swap(j, j - 1);
+                                j -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                None => items.sort_by(value_cmp),
+                Some(other) => {
+                    return Ok(method_error(format!(
+                        "sort: expected a comparator function, got {}",
+                        other.type_name()
+                    )));
+                }
+            }
+            *arr.lock().unwrap() = items.clone();
+            Ok(Value::Array(arr))
+        })
+    })
+}
+
+fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        _ => a.display().cmp(&b.display()),
+    }
 }
