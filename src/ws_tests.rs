@@ -230,8 +230,16 @@ async fn test_chat_rhp_serves_page_and_relays_messages() {
 
     a.send_text(r#"{"name":"alice","text":"hi"}"#).await;
 
-    assert_eq!(b.receive_text().await, r#"{"name":"alice","text":"hi"}"#);
-    assert_no_message(&mut a).await;
+    // The server renders the message HTML and relays it to everyone in the
+    // room (including the sender), tagged with the sender's socket id.
+    let to_a: serde_json::Value = a.receive_json().await;
+    let to_b: serde_json::Value = b.receive_json().await;
+    assert_eq!(
+        to_a["html"],
+        r#"<div class="message"><span class="sender">alice</span><span class="text">hi</span></div>"#
+    );
+    assert_eq!(to_a["html"], to_b["html"]);
+    assert_eq!(to_a["from"], welcome_a["id"]);
     assert_no_message(&mut c).await;
 }
 
@@ -253,28 +261,34 @@ async fn test_chat_rhp_persists_and_replays_history() {
     let mut c = ws_connect(&server, "/chat.rhp?room=beta").await;
     let _: serde_json::Value = c.receive_json().await; // welcome
 
-    // Messages are relayed to peers in the same room...
+    // Messages are rendered server-side and relayed to everyone in the room...
     a.send_text(r#"{"name":"alice","text":"first"}"#).await;
     a.send_text(r#"{"name":"alice","text":"second"}"#).await;
-    assert_eq!(b.receive_text().await, r#"{"name":"alice","text":"first"}"#);
+    let to_b_1: serde_json::Value = b.receive_json().await;
+    let to_b_2: serde_json::Value = b.receive_json().await;
     assert_eq!(
-        b.receive_text().await,
-        r#"{"name":"alice","text":"second"}"#
+        to_b_1["html"],
+        r#"<div class="message"><span class="sender">alice</span><span class="text">first</span></div>"#
+    );
+    assert_eq!(
+        to_b_2["html"],
+        r#"<div class="message"><span class="sender">alice</span><span class="text">second</span></div>"#
     );
     assert_no_message(&mut c).await;
 
-    // ...and a fresh join replays the stored history for that room only.
+    // ...and a fresh join replays the stored history as rendered HTML for
+    // that room only.
     let mut d = ws_connect(&server, "/chat.rhp?room=alpha").await;
     let welcome: serde_json::Value = d.receive_json().await;
     assert_eq!(welcome["event"], "welcome");
-    let history = welcome["history"].as_array().unwrap();
-    assert_eq!(history.len(), 2);
-    assert_eq!(history[0]["body"], r#"{"name":"alice","text":"first"}"#);
-    assert_eq!(history[1]["body"], r#"{"name":"alice","text":"second"}"#);
+    assert_eq!(
+        welcome["historyHtml"].as_str().unwrap(),
+        r#"<div class="message"><span class="sender">alice</span><span class="text">first</span></div><div class="message"><span class="sender">alice</span><span class="text">second</span></div>"#
+    );
 
     let mut e = ws_connect(&server, "/chat.rhp?room=beta").await;
     let welcome_beta: serde_json::Value = e.receive_json().await;
-    assert_eq!(welcome_beta["history"].as_array().unwrap().len(), 0);
+    assert_eq!(welcome_beta["historyHtml"].as_str().unwrap(), "");
 }
 
 fn urlencode(s: &str) -> String {

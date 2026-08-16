@@ -50,6 +50,25 @@ async fn test_basic_eval() {
 }
 
 #[tokio::test]
+async fn test_json_parse() {
+    assert_eq!(
+        test_process(
+            r#"
+        let m = JSON.Parse('{"name":"alice","text":"hi"}')
+        return m.name + ':' + m.text
+    "#
+        )
+        .await,
+        "alice:hi"
+    );
+    assert_eq!(test_process("return JSON.Parse('not json')").await, "null");
+    assert_eq!(
+        test_process("return JSON.Parse(42)").await,
+        "JSON.Parse: expected a JSON string, got number"
+    );
+}
+
+#[tokio::test]
 async fn test_pass_function() {
     assert_eq!(
         test_process(
@@ -1218,20 +1237,13 @@ async fn test_comments_and_string_escapes() {
 
 #[tokio::test]
 async fn test_html_block() {
+    // Raw HTML outside the <rhp> block passes through untouched; code inside
+    // the block runs and renders into the output.
+    let src = r#"<header>Site</header><rhp>let n = 2
+return <p>{n}</p></rhp><footer>bye</footer>"#;
     assert_eq!(
-        test_process(
-            r"
-        let state = { hits: 0 }
-        <html>
-            state.hits = 1
-            state.meta = 'x'
-            if (state.hits === 1) { state.ok = true }
-        </html>
-        return state.hits + ':' + state.ok
-    "
-        )
-        .await,
-        "1:true"
+        process_src(src.to_string(), ctx(Method::Get), test_conn().await).await,
+        "<header>Site</header><p>2</p><footer>bye</footer>"
     );
 }
 
@@ -1318,5 +1330,19 @@ async fn test_html_template_expression_in_slot() {
         )
         .await,
         "<p>2 + 3 = 5</p>"
+    );
+}
+
+#[tokio::test]
+async fn test_html_template_ternary() {
+    assert_eq!(
+        test_process(
+            r#"
+        let primary = true
+        return <><button class={primary ? "primary" : ""}>Post</button></>
+    "#
+        )
+        .await,
+        r#"<button class="primary">Post</button>"#
     );
 }

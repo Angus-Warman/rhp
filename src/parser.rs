@@ -124,10 +124,7 @@ impl<'a> Parser<'a> {
 
     fn parse_block_contents(&mut self) -> Vec<Stmt> {
         let mut stmts = Vec::new();
-        while !self.is_at_end()
-            && self.peek() != Some(&Token::RBrace)
-            && self.peek() != Some(&Token::HtmlClose)
-        {
+        while !self.is_at_end() && self.peek() != Some(&Token::RBrace) {
             stmts.push(self.parse_stmt());
         }
         stmts
@@ -163,7 +160,6 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Semicolon);
                 Ok(RawStmt::Continue)
             }
-            Some(Token::HtmlOpen) => self.parse_html_block_stmt(),
             _ => self.parse_expr_stmt(),
         };
 
@@ -338,15 +334,6 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr()?;
         self.eat(&Token::Semicolon);
         Ok(RawStmt::Try(value))
-    }
-
-    fn parse_html_block_stmt(&mut self) -> Result<RawStmt, ParseError> {
-        self.advance(); // eat `<html>`
-        let inner = self.parse_block_contents();
-        self.expect(&Token::HtmlClose, "expected `</html>`");
-        // Wrap in an Expr statement containing HtmlBlock
-        let span = self.current_span();
-        Ok(RawStmt::Expr(Spanned::new(RawExpr::HtmlBlock(inner), span)))
     }
 
     fn parse_expr_stmt(&mut self) -> Result<RawStmt, ParseError> {
@@ -708,17 +695,23 @@ impl<'a> Parser<'a> {
                 let tag = tag.clone();
                 self.advance(); // `<`
                 self.advance(); // tag
+                let attrs = self.parse_template_attrs()?;
                 if self.peek() == Some(&Token::Slash) {
                     self.advance();
                     self.expect(&Token::Gt, "expected `>` after self-closing tag");
                     vec![TemplateNode::Element {
                         tag,
+                        attrs,
                         children: vec![],
                     }]
                 } else {
                     self.expect(&Token::Gt, "expected `>` after tag name");
                     let children = self.parse_template_children(Some(&tag))?;
-                    vec![TemplateNode::Element { tag, children }]
+                    vec![TemplateNode::Element {
+                        tag,
+                        attrs,
+                        children,
+                    }]
                 }
             }
             _ => {
@@ -824,17 +817,23 @@ impl<'a> Parser<'a> {
                         let tag = tag.clone();
                         self.advance(); // `<`
                         self.advance(); // tag
+                        let attrs = self.parse_template_attrs()?;
                         if self.peek() == Some(&Token::Slash) {
                             self.advance();
                             self.expect(&Token::Gt, "expected `>` after self-closing tag");
                             nodes.push(TemplateNode::Element {
                                 tag,
+                                attrs,
                                 children: vec![],
                             });
                         } else {
                             self.expect(&Token::Gt, "expected `>` after tag name");
                             let children = self.parse_template_children(Some(&tag))?;
-                            nodes.push(TemplateNode::Element { tag, children });
+                            nodes.push(TemplateNode::Element {
+                                tag,
+                                attrs,
+                                children,
+                            });
                         }
                         text_start = self.last_consumed_end();
                     }
@@ -864,6 +863,57 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    // Parse the attributes between a template tag name and its closing `>`:
+    //   class="primary"                        static value (as written)
+    //   class={primary ? "primary" : ""}       evaluated + escaped at render
+    //   disabled                               boolean (emits just the name)
+    fn parse_template_attrs(&mut self) -> Result<Vec<Attr>, ParseError> {
+        let mut attrs = Vec::new();
+        loop {
+            match self.peek() {
+                Some(Token::Gt) | Some(Token::Slash) => break,
+                Some(Token::Ident(name)) => {
+                    let name = name.clone();
+                    self.advance();
+                    if self.eat(&Token::Assign) {
+                        match self.peek() {
+                            Some(Token::LBrace) => {
+                                self.advance(); // `{`
+                                let expr = self.parse_assign()?;
+                                self.expect(
+                                    &Token::RBrace,
+                                    "expected `}` after attribute expression",
+                                );
+                                attrs.push(Attr::Expr(name, Box::new(expr)));
+                            }
+                            Some(Token::StringDouble(value) | Token::StringSingle(value)) => {
+                                let value = value.clone();
+                                self.advance();
+                                attrs.push(Attr::Static(name, value));
+                            }
+                            _ => {
+                                return Err(ParseError {
+                                    message: "expected `{expr}` or a quoted value after `=`"
+                                        .to_string(),
+                                    span: self.current_span(),
+                                });
+                            }
+                        }
+                    } else {
+                        attrs.push(Attr::Bool(name));
+                    }
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: "expected an attribute name".to_string(),
+                        span: self.current_span(),
+                    });
+                }
+            }
+        }
+        Ok(attrs)
     }
 
     // Single bare ident, could be the start of an arrow: `x => ...`

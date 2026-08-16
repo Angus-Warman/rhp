@@ -77,9 +77,6 @@ pub enum RawExpr {
         body: ArrowBody,
     },
 
-    // <html> ... </html> block inside script
-    HtmlBlock(Vec<Stmt>),
-
     // JSX-like template: <><p>{expr}</p></>
     HtmlTemplate(Vec<TemplateNode>),
 }
@@ -88,10 +85,21 @@ pub enum RawExpr {
 pub enum TemplateNode {
     Element {
         tag: String,
+        attrs: Vec<Attr>,
         children: Vec<TemplateNode>,
     },
     Text(String),
     Expr(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Attr {
+    // disabled  (boolean attribute, no value)
+    Bool(String),
+    // class="primary"
+    Static(String, String),
+    // class={expr}  (escaped at render time)
+    Expr(String, Box<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

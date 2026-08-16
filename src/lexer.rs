@@ -75,12 +75,6 @@ pub enum Token {
     #[token("false")]
     False,
 
-    // --- HTML snippet ---
-    #[token("<html>")]
-    HtmlOpen,
-    #[token("</html>")]
-    HtmlClose,
-
     // --- Identifiers ---
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Ident(String),

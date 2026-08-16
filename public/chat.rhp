@@ -158,23 +158,11 @@
             return proto + '://' + location.host + location.pathname + location.search;
         }
 
-        function addMessage(msg) {
-            const row = document.createElement('div');
-            row.className = 'message';
-            if (msg.self) row.classList.add('self');
-            if (msg.system) row.classList.add('system');
-
-            const sender = document.createElement('span');
-            sender.className = 'sender';
-            sender.textContent = msg.system ? 'system' : (msg.name || 'anon');
-
-            const text = document.createElement('span');
-            text.className = 'text';
-            text.textContent = msg.text;
-
-            row.appendChild(sender);
-            row.appendChild(text);
-            messagesEl.appendChild(row);
+        function addMessage(data) {
+            messagesEl.insertAdjacentHTML('beforeend', data.html);
+            if (data.from && data.from === me) {
+                messagesEl.lastElementChild.classList.add('self');
+            }
             messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
@@ -205,15 +193,10 @@
                 if (data.event === 'welcome') {
                     me = data.id;
                     setStatus('connected as ' + me.slice(0, 8));
-                    if (data.history) {
-                        data.history.forEach((row) => {
-                            let m;
-                            try { m = JSON.parse(row.body); } catch (e) { return; }
-                            addMessage(m);
-                        });
+                    if (data.historyHtml) {
+                        messagesEl.insertAdjacentHTML('beforeend', data.historyHtml);
+                        messagesEl.scrollTop = messagesEl.scrollHeight;
                     }
-                } else if (data.event === 'leave') {
-                    addMessage({ system: true, text: 'A user left the room' });
                 } else {
                     addMessage(data);
                 }
@@ -240,7 +223,6 @@
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
             name = nameInput.value.trim() || 'anon';
             try { localStorage.setItem('chat.name', name); } catch (e) { }
-            addMessage({ name: name, text: text, self: true });
             ws.send(JSON.stringify({ name: name, text: text }));
             messageInput.value = '';
             messageInput.focus();
@@ -262,10 +244,18 @@
 
     let history = DB.Query("SELECT * FROM (SELECT * FROM messages WHERE room = ? ORDER BY id DESC LIMIT 10) ORDER BY id ASC").Bind(room).All()
 
-    SOCKET.Client().OnMessage(msg => {
-        DB.Table("messages").Insert({ room: room, body: msg }).Run()
-        SOCKET.Peers().Send(msg)
+    let historyHtml = ""
+    for (row in history) {
+        let m = JSON.Parse(row.body)
+        historyHtml = historyHtml + <div class="message"><span class="sender">{m.name}</span><span class="text">{m.text}</span></div>
+    }
+
+    SOCKET.Client().OnMessage(raw => {
+        let m = JSON.Parse(raw)
+        DB.Table("messages").Insert({ room: room, body: raw }).Run()
+        let html = <div class="message"><span class="sender">{m.name}</span><span class="text">{m.text}</span></div>
+        SOCKET.Everyone().Send({ html: html, from: SOCKET.Client().Id() })
     })
-    SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ event: "leave", id: SOCKET.Client().Id() }))
-    return { event: "welcome", id: SOCKET.Client().Id(), room: room, history: history }
+    SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ html: <div class="message system"><span class="text">A user left the room</span></div> }))
+    return { event: "welcome", id: SOCKET.Client().Id(), room: room, historyHtml: historyHtml }
 </rhp>

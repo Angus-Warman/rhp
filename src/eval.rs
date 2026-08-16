@@ -405,19 +405,6 @@ impl Evaluator {
                 Ok(Value::Function(func))
             }
 
-            RawExpr::HtmlBlock(stmts) => {
-                // Evaluate stmts; any output they push goes to self.output
-                let child = Env::new_child(env);
-                self.eval_block(stmts, child).await.map_err(|s| match s {
-                    Signal::Error(e) => Signal::Error(e),
-                    other => Signal::Error(EvalError::new(
-                        format!("unexpected signal in html block: {:?}", other),
-                        expr.span.clone(),
-                    )),
-                })?;
-                Ok(Value::Null)
-            }
-
             RawExpr::HtmlTemplate(nodes) => {
                 let html = self.eval_template(nodes, env).await?;
                 Ok(Value::String(html))
@@ -436,9 +423,36 @@ impl Evaluator {
         for node in nodes {
             match node {
                 TemplateNode::Text(text) => out.push_str(text),
-                TemplateNode::Element { tag, children } => {
+                TemplateNode::Element {
+                    tag,
+                    attrs,
+                    children,
+                } => {
                     out.push('<');
                     out.push_str(tag);
+                    for attr in attrs {
+                        match attr {
+                            Attr::Bool(name) => {
+                                out.push(' ');
+                                out.push_str(name);
+                            }
+                            Attr::Static(name, value) => {
+                                out.push(' ');
+                                out.push_str(name);
+                                out.push_str("=\"");
+                                out.push_str(value);
+                                out.push('"');
+                            }
+                            Attr::Expr(name, expr) => {
+                                let value = self.eval_expr(expr, env.clone()).await?;
+                                out.push(' ');
+                                out.push_str(name);
+                                out.push_str("=\"");
+                                out.push_str(&escape_html(&value.display()));
+                                out.push('"');
+                            }
+                        }
+                    }
                     out.push('>');
                     out.push_str(&self.eval_template(children, env.clone()).await?);
                     out.push_str("</");

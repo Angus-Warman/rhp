@@ -317,6 +317,42 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("BODY", context.body.clone());
 
+        // Define JSON.Parse
+        let parse_json = Value::Function(Function {
+            params: vec!["text".to_string()],
+            body: FunctionBody::Native(Arc::new(|args| {
+                Box::pin(async move {
+                    let text = match args.first() {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(other) => {
+                            return Ok(Value::String(format!(
+                                "JSON.Parse: expected a JSON string, got {}",
+                                other.type_name()
+                            )));
+                        }
+                        None => {
+                            return Ok(Value::String(
+                                "JSON.Parse: expected a JSON string".to_string(),
+                            ));
+                        }
+                    };
+                    match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(json) => Ok(json_to_value(json)),
+                        Err(_) => Ok(Value::Null),
+                    }
+                })
+            })),
+            captured: Env::new_root(),
+        });
+
+        let json = Value::Object(Arc::new(Mutex::new({
+            let mut map = HashMap::new();
+            map.insert("Parse".to_string(), parse_json);
+            map
+        })));
+
+        env_mut.define("JSON", json);
+
         // Define console.log
         let log = Value::Function(Function {
             params: vec!["value".to_string()],
