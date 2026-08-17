@@ -8,7 +8,7 @@ static DB_ID: AtomicU64 = AtomicU64::new(0);
 
 async fn test_server() -> TestServer {
     let conn = unique_conn().await;
-    TestServer::new(build_router("./public".into(), conn))
+    TestServer::new(build_router("./public".into(), conn, None))
 }
 
 async fn unique_conn() -> DbConn {
@@ -50,7 +50,7 @@ async fn test_response_controls_http_status_and_redirect() {
         ],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn));
+    let server = TestServer::new(build_router(folder, conn, None));
 
     let gone = server.get("/gone.rhp").await;
     gone.assert_status(axum::http::StatusCode::GONE);
@@ -91,7 +91,7 @@ async fn test_index_rhp_visit_counter() {
         &[("index.rhp", &src), ("index.html", "<h1>static</h1>")],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn));
+    let server = TestServer::new(build_router(folder, conn, None));
     for expected in 1..=3 {
         let response = server.get("/").await;
         response.assert_status_ok();
@@ -109,7 +109,7 @@ async fn test_root_prefers_index_rhp() {
         ],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn));
+    let server = TestServer::new(build_router(folder, conn, None));
     let response = server.get("/").await;
     response.assert_status_ok();
     response.assert_text_contains("rhp index");
@@ -122,7 +122,7 @@ async fn test_root_serves_static_index_without_rhp() {
         &[("index.html", "<h1>static index</h1>")],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn));
+    let server = TestServer::new(build_router(folder, conn, None));
     let response = server.get("/").await;
     response.assert_status_ok();
     response.assert_text_contains("static index");
@@ -233,7 +233,7 @@ async fn test_body_global_invalid_json_is_400() {
 #[tokio::test]
 async fn test_crud_workflow() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn));
+    let server = TestServer::new(build_router("./public".into(), conn, None));
 
     // GET: no widgets yet
     assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
@@ -291,7 +291,7 @@ async fn test_crud_workflow() {
 #[tokio::test]
 async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn));
+    let server = TestServer::new(build_router("./public".into(), conn, None));
     server.get("/crud.rhp").await;
     server
         .post("/crud.rhp")
@@ -336,7 +336,7 @@ async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
 #[tokio::test]
 async fn test_crud_sql_injection_body_name_stored_safely() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn));
+    let server = TestServer::new(build_router("./public".into(), conn, None));
     server.get("/crud.rhp").await;
 
     // A hostile name is bound as data, not spliced into SQL.
@@ -355,4 +355,22 @@ async fn test_crud_sql_injection_body_name_stored_safely() {
         server.get("/crud.rhp").await.text().trim(),
         r#"[{ id: 1, name: "x'); DROP TABLE widgets;--" }]"#
     );
+}
+
+#[test]
+fn test_inject_hot_reload_script_before_body_close() {
+    let html = "<html><body><h1>Hello</h1></body></html>";
+    let result = super::inject_hot_reload_script(html);
+    assert!(result.contains("</body>"));
+    let pos_script = result.find("EventSource").expect("script not injected");
+    let pos_body = result.find("</body>").unwrap();
+    assert!(pos_script < pos_body, "script should be before </body>");
+}
+
+#[test]
+fn test_inject_hot_reload_script_at_end_when_no_body() {
+    let html = "<html><h1>Hello</h1></html>";
+    let result = super::inject_hot_reload_script(html);
+    assert!(result.contains("EventSource"));
+    assert!(!result.contains("</body>"));
 }

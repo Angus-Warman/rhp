@@ -22,6 +22,10 @@ struct Args {
 
     #[arg(long, env = "DB_CONN", default_value = ":memory:")]
     db_conn: Option<String>,
+
+    /// Enable hot-reload: watch files and auto-reload the browser on changes
+    #[arg(long, env = "HOT_RELOAD")]
+    hot_reload: bool,
 }
 
 #[tokio::main]
@@ -41,6 +45,6 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_max_level(level).init();
 
-    run_server(port, folder, &db_conn).await?;
+    run_server(port, folder, &db_conn, args.hot_reload).await?;
     Ok(())
 }

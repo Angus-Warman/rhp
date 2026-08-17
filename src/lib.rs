@@ -11,6 +11,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use tokio::sync::broadcast;
 use tower::util::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -30,10 +32,25 @@ mod process;
 mod value;
 mod ws;
 
-pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str) -> Result<()> {
+pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, hot_reload: bool) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
     let conn = connect(db_conn).await?;
-    let app = build_router(folder, conn);
+
+    let tx = if hot_reload {
+        let watch_path = folder.canonicalize().unwrap_or_else(|_| folder.clone());
+        tracing::info!("hot-reload enabled, watching {watch_path:?}");
+        let tx = broadcast::Sender::new(64);
+        let watcher = start_file_watcher(&watch_path, tx.clone());
+        tokio::spawn(async move {
+            let _watcher = watcher;
+            std::future::pending::<()>().await;
+        });
+        Some(tx)
+    } else {
+        None
+    };
+
+    let app = build_router(folder, conn, tx);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     dbg!(&listener);
     axum::serve(listener, app).await?;
@@ -45,20 +62,26 @@ struct AppState {
     folder: PathBuf,
     conn: DbConn,
     sockets: Arc<SocketRegistry>,
+    tx: Option<broadcast::Sender<String>>,
 }
 
-fn build_router(folder: PathBuf, conn: DbConn) -> Router {
+fn build_router(folder: PathBuf, conn: DbConn, tx: Option<broadcast::Sender<String>>) -> Router {
     let state = AppState {
         folder,
         conn,
         sockets: Arc::new(SocketRegistry::new()),
+        tx,
     };
 
-    Router::new()
+    let mut router = Router::new()
         .route("/", any(rhp_handler))
-        .route("/{*path}", any(rhp_handler))
-        .with_state(state)
-        .layer(TraceLayer::new_for_http())
+        .route("/{*path}", any(rhp_handler));
+
+    if state.tx.is_some() {
+        router = router.route("/_rhp/hot-reload", any(sse_handler));
+    }
+
+    router.with_state(state).layer(TraceLayer::new_for_http())
 }
 
 #[debug_handler]
@@ -86,7 +109,9 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
     }
 
     match resolve_rhp(&state.folder, request.uri().path()) {
-        Some(rhp) => process_rhp(rhp, request, state.conn).await.into_response(),
+        Some(rhp) => process_rhp(rhp, request, state.conn, state.tx.is_some())
+            .await
+            .into_response(),
         None => ServeDir::new(state.folder)
             .oneshot(request)
             .await
@@ -123,7 +148,7 @@ fn is_ws_upgrade(request: &Request) -> bool {
     has(header::CONNECTION) && has(header::UPGRADE)
 }
 
-async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response {
+async fn process_rhp(path: PathBuf, request: Request, conn: DbConn, hot_reload: bool) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => {
             let context = match Context::from_request(request).await {
@@ -133,10 +158,89 @@ async fn process_rhp(path: PathBuf, request: Request, conn: DbConn) -> Response 
                 }
             };
             let (html, response) = process_src(src, context, conn).await;
+            let html = if hot_reload {
+                inject_hot_reload_script(&html)
+            } else {
+                html
+            };
             response.into_axum(html)
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+const HOT_RELOAD_SCRIPT: &str = r#"<script>
+(() => {
+  const s = new EventSource("/_rhp/hot-reload");
+  s.onmessage = () => { location.reload(); };
+})();
+</script>"#;
+
+fn inject_hot_reload_script(html: &str) -> String {
+    if let Some(pos) = html.rfind("</body>") {
+        let mut out = String::with_capacity(html.len() + HOT_RELOAD_SCRIPT.len() + 1);
+        out.push_str(&html[..pos]);
+        out.push('\n');
+        out.push_str(HOT_RELOAD_SCRIPT);
+        out.push('\n');
+        out.push_str(&html[pos..]);
+        out
+    } else {
+        format!("{html}\n{HOT_RELOAD_SCRIPT}\n")
+    }
+}
+
+async fn sse_handler(State(state): State<AppState>) -> Response {
+    let Some(tx) = state.tx else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let rx = tx.subscribe();
+
+    let stream = async_stream::stream! {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(path) => {
+                    yield Ok::<_, std::convert::Infallible>(
+                        axum::response::sse::Event::default().data(path),
+                    );
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
+}
+
+fn start_file_watcher(folder: &Path, tx: broadcast::Sender<String>) -> RecommendedWatcher {
+    let folder_clone = folder.to_path_buf();
+    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+        if let Ok(event) = res {
+            match event.kind {
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                    for path in &event.paths {
+                        if let Ok(rel) = path.strip_prefix(&folder_clone)
+                            && let Some(s) = rel.to_str()
+                        {
+                            let _ = tx.send(s.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .expect("failed to create file watcher");
+
+    watcher
+        .watch(folder, RecursiveMode::Recursive)
+        .expect("failed to watch folder");
+
+    watcher
 }
 
 #[cfg(test)]

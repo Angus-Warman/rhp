@@ -1,13 +1,3 @@
-# RHP — TODO
-
-What's implemented today: server-side HTML templating inside `<rhp>` sections,
-GET/POST/PUT/etc. method sections, a JS-ish language (`let`/`const`/`var`,
-arrow fns, `for..in`, `while`, `try <stmt>` early-return, object/array literals,
-template slots `{expr}` with auto-escaping), `DB.*` ORM-style statements,
-`SOCKET.*` websockets, and intrinsics `JSON`, `TIME`, `MATH`, `console`.
-
-Priorities: `[P0]` next up, `[P1]` soon, `[P2]` nice to have.
-
 ## HTTP / server layer
 
 - [x] `[P0]` **Script-controlled HTTP responses.** Today every `.rhp` always
@@ -91,11 +81,6 @@ Priorities: `[P0]` next up, `[P1]` soon, `[P2]` nice to have.
       events on join/leave).
 
 ## Project
-
-- [ ] `[P0]` **README** — what RHP is, quickstart, language reference,
-      section/method model, DB + SOCKET APIs.
-- [ ] `[P1]` **`.env.example`** documenting `PORT`, `FOLDER`, `DB_CONN`,
-      `DEBUG`.
 - [ ] `[P1]` **Example app** — a small CRUD todo/notes app showing
       `DB.Table`, forms (`BODY`), templates, and redirects end-to-end.
 - [ ] `[P2]` **CI** (cargo fmt / clippy / test on push).

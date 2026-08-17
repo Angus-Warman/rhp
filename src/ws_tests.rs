@@ -31,7 +31,7 @@ async fn ws_server(src: &str) -> TestServer {
     let conn = ws_conn().await;
     TestServer::builder()
         .http_transport()
-        .build(build_router(folder, conn))
+        .build(build_router(folder, conn, None))
 }
 
 async fn ws_connect(server: &TestServer, path: &str) -> axum_test::TestWebSocket {
@@ -207,7 +207,7 @@ async fn test_chat_rhp_serves_page_and_relays_messages() {
     let conn = ws_conn().await;
     let server = TestServer::builder()
         .http_transport()
-        .build(build_router(folder, conn));
+        .build(build_router(folder, conn, None));
 
     let page = server.get("/chat.rhp").await;
     page.assert_status_ok();
@@ -249,7 +249,7 @@ async fn test_chat_rhp_persists_and_replays_history() {
     let conn = ws_conn().await;
     let server = TestServer::builder()
         .http_transport()
-        .build(build_router(folder, conn));
+        .build(build_router(folder, conn, None));
 
     // The page GET runs the `<rhp method="GET">` section that creates the table.
     server.get("/chat.rhp").await.assert_status_ok();
