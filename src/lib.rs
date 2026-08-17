@@ -14,8 +14,9 @@ use axum::{
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::broadcast;
 use tower::util::ServiceExt;
-use tower_http::services::ServeDir;
-use tower_http::trace::TraceLayer;
+use tower_http::{services::ServeDir, trace::{DefaultMakeSpan, DefaultOnRequest}};
+use tower_http::trace::{TraceLayer};
+use tracing::{Level};
 
 use crate::{
     db::{DbConn, connect},
@@ -52,7 +53,8 @@ pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, hot_reload: b
 
     let app = build_router(folder, conn, tx);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    dbg!(&listener);
+    let local = listener.local_addr()?;
+    tracing::info!("listening on http://{local}");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -81,7 +83,11 @@ fn build_router(folder: PathBuf, conn: DbConn, tx: Option<broadcast::Sender<Stri
         router = router.route("/_rhp/hot-reload", any(sse_handler));
     }
 
-    router.with_state(state).layer(TraceLayer::new_for_http())
+    router.with_state(state).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_request(DefaultOnRequest::new().level(Level::INFO))
+    )
 }
 
 #[debug_handler]
