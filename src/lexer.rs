@@ -62,6 +62,12 @@ pub enum Token {
     Continue,
     #[token("break")]
     Break,
+    #[token("switch")]
+    Switch,
+    #[token("case")]
+    Case,
+    #[token("default")]
+    Default,
     #[token("if")]
     If,
     #[token("else")]

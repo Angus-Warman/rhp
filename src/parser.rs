@@ -101,7 +101,8 @@ impl<'a> Parser<'a> {
                     | Token::Return
                     | Token::Break
                     | Token::Continue
-                    | Token::Function,
+                    | Token::Function
+                    | Token::Switch,
                 ) => break,
                 _ => {
                     self.advance();
@@ -148,6 +149,7 @@ impl<'a> Parser<'a> {
             Some(Token::If) => self.parse_if(),
             Some(Token::While) => self.parse_while(),
             Some(Token::For) => self.parse_for(),
+            Some(Token::Switch) => self.parse_switch(),
             Some(Token::Return) => self.parse_return(),
             Some(Token::Try) => self.parse_try(),
             Some(Token::Break) => {
@@ -232,6 +234,55 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RParen, "expected `)` after condition");
         let body = self.parse_block();
         Ok(RawStmt::While { cond, body })
+    }
+
+    fn parse_switch(&mut self) -> Result<RawStmt, ParseError> {
+        self.advance(); // eat `switch`
+        self.expect(&Token::LParen, "expected `(` after `switch`");
+        let expr = self.parse_expr()?;
+        self.expect(&Token::RParen, "expected `)` after switch expression");
+        self.expect(&Token::LBrace, "expected `{` to start switch body");
+
+        let mut cases = Vec::new();
+
+        while self.peek() != Some(&Token::RBrace) && !self.is_at_end() {
+            if self.eat(&Token::Case) {
+                let value = self.parse_expr()?;
+                self.expect(&Token::Colon, "expected `:` after case expression");
+                let mut stmts = Vec::new();
+                while self.peek() != Some(&Token::Case)
+                    && self.peek() != Some(&Token::Default)
+                    && self.peek() != Some(&Token::RBrace)
+                    && !self.is_at_end()
+                {
+                    stmts.push(self.parse_stmt());
+                }
+                cases.push(SwitchCase {
+                    test: Some(value),
+                    body: stmts,
+                });
+            } else if self.eat(&Token::Default) {
+                self.expect(&Token::Colon, "expected `:` after `default`");
+                let mut stmts = Vec::new();
+                while self.peek() != Some(&Token::Case)
+                    && self.peek() != Some(&Token::Default)
+                    && self.peek() != Some(&Token::RBrace)
+                    && !self.is_at_end()
+                {
+                    stmts.push(self.parse_stmt());
+                }
+                cases.push(SwitchCase {
+                    test: None,
+                    body: stmts,
+                });
+            } else {
+                // unexpected token inside switch — break out
+                break;
+            }
+        }
+
+        self.expect(&Token::RBrace, "expected `}` to end switch body");
+        Ok(RawStmt::Switch { expr, cases })
     }
 
     fn parse_for(&mut self) -> Result<RawStmt, ParseError> {

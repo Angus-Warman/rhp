@@ -2012,3 +2012,174 @@ async fn test_array_for_each() {
         "6"
     );
 }
+
+#[tokio::test]
+async fn test_switch_basic_match() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch (1) {
+            case 1: result = "one" break
+            case 2: result = "two" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "one"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_fall_through() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch (1) {
+            case 1: result = result + "a"
+            case 2: result = result + "b" break
+            case 3: result = result + "c" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "ab"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_default_when_no_match() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch (99) {
+            case 1: result = "one" break
+            case 2: result = "two" break
+            default: result = "other" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "other"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_default_before_cases() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch (99) {
+            default: result = "default"
+            case 1: result = result + "one" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "defaultone"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_no_default_no_match() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = "unchanged"
+        switch (99) {
+            case 1: result = "one" break
+            case 2: result = "two" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "unchanged"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_last_case_falls_into_default() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch (1) {
+            case 1: result = result + "a"
+            case 2: result = result + "b"
+            default: result = result + "d"
+        }
+        return result
+    "#
+        )
+        .await,
+        "abd"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_string_comparison() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        switch ("hello") {
+            case "world": result = "world" break
+            case "hello": result = "hello" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "hello"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_expression_case() {
+    assert_eq!(
+        test_process(
+            r#"
+        let x = 3
+        let result = ""
+        switch (x) {
+            case 1 + 1: result = "two" break
+            case 1 + 2: result = "three" break
+        }
+        return result
+    "#
+        )
+        .await,
+        "three"
+    );
+}
+
+#[tokio::test]
+async fn test_switch_continue() {
+    assert_eq!(
+        test_process(
+            r#"
+        let result = ""
+        let i = 0
+        while (i < 5) {
+            i = i + 1
+            switch (i) {
+                case 2: continue
+                case 3: result = result + "x" break
+            }
+            result = result + "+"
+        }
+        return result
+    "#
+        )
+        .await,
+        "+x+++"
+    );
+}

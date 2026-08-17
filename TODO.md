@@ -41,7 +41,9 @@ Priorities: `[P0]` next up, `[P1]` soon, `[P2]` nice to have.
       uniformly. Same for the `DB.Ping()` `unwrap()`. — *Done.*
 - [x] `[P0]` **`const` enforcement.** Assigning to a `const` should error. —
       *Done: `Env` tracks consts; assignment raises a runtime error.*
-- [ ] `[P1]` **`typeof x`** / `x.type` — return `"string"`, `"number"`, etc.
+- [x] `[P1]` **`typeof x`** / `x.type` — return `"string"`, `"number"`, etc.
+      — *Done: prefix `typeof` operator and `.type` property on non-object
+      values.*
 - [ ] `[P1]` **`throw` + `try/catch`.** `try` today only early-returns falsy
       *values*; thrown runtime errors still abort the script. Add `catch (e)`
       handling of `Signal::Error`.
@@ -49,15 +51,19 @@ Priorities: `[P0]` next up, `[P1]` soon, `[P2]` nice to have.
       `{expr}`).
 - [ ] `[P1]` **Unicode `.length`.** String `.length` uses byte length; make it
       character count.
-- [ ] `[P2]` **`switch`, `do...while`**, nullish coalescing `??`, optional
-      chaining `?.`, exponent `**`, `%=`, `>>=`, etc.
+- [ ] `[P2]` **`do...while`**, nullish coalescing `??`, optional
+      chaining `?.`, exponent `**`.
+- [x] `[P2]` **`switch` statements** — JS-style with fall-through, `case`/`default`,
+      `break` to exit, `continue` to skip enclosing loop. — *Done.*
+- [x] `[P2]` **Compound assignments** `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`
+      and bitwise binary operators `&`, `|`, `^`, `<<`, `>>`. — *Done.*
 - [ ] `[P2]` **`var` vs `let` scoping** semantics (currently identical).
 
 ## Array / object helpers
 
-- [ ] `[P1]` **Iteration/transformation methods** — the gap that makes
+- [x] `[P1]` **Iteration/transformation methods** — the gap that makes
       server-side list rendering awkward: `map`, `filter`, `forEach`,
-      `reduce`, `sort`, `slice`, `indexOf`, `includes`.
+      `reduce`, `sort`, `slice`, `indexOf`, `includes`. — *Done.*
 - [ ] `[P1]` **Object helpers**: `Object.keys/values/entries`.
 - [ ] `[P2]` **`String.padStart`, `substr`, `startsWith/endsWith`**, number
       formatting (`toFixed`).

@@ -208,6 +208,12 @@ pub enum RawStmt {
         body: Vec<Stmt>,
     },
 
+    // switch (expr) { case val: stmts ... default: stmts }
+    Switch {
+        expr: Expr,
+        cases: Vec<SwitchCase>,
+    },
+
     Return(Option<Expr>),
     // `try <stmt>` — runs stmt; if its value is falsy, returns it early.
     Try(Box<Stmt>),
@@ -226,4 +232,10 @@ pub enum VarKind {
     Let,
     Const,
     Var,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub test: Option<Expr>,
+    pub body: Vec<Stmt>,
 }

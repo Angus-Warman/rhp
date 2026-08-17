@@ -281,6 +281,45 @@ impl Evaluator {
                 Ok(())
             }
 
+            RawStmt::Switch { expr, cases } => {
+                let discriminant = self.eval_expr(expr, env.clone()).await?;
+
+                // Find the first matching case index
+                let mut start_idx = None;
+                let mut default_idx = None;
+                for (i, case) in cases.iter().enumerate() {
+                    if case.test.is_none() && default_idx.is_none() {
+                        default_idx = Some(i);
+                    }
+                    if let Some(ref test_expr) = case.test {
+                        let case_val = self.eval_expr(test_expr, env.clone()).await?;
+                        if loose_eq(&discriminant, &case_val) {
+                            start_idx = Some(i);
+                            break;
+                        }
+                    }
+                }
+
+                // Determine where to start executing
+                let Some(mut from) = start_idx.or(default_idx) else {
+                    return Ok(());
+                };
+
+                // Execute from the starting case, falling through
+                while from < cases.len() {
+                    let child = Env::new_child(env.clone());
+                    match self.eval_block(&cases[from].body, child).await {
+                        Ok(()) => {} // fall through to next case
+                        Err(Signal::Break) => return Ok(()),
+                        Err(Signal::Continue) => return Err(Signal::Continue),
+                        Err(e) => return Err(e),
+                    }
+                    from += 1;
+                }
+
+                Ok(())
+            }
+
             RawStmt::Return(expr) => {
                 let value = match expr {
                     Some(e) => self.eval_expr(e, env).await?,
