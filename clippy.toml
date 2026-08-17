@@ -1,0 +1,4 @@
+disallowed-methods = [
+  { path = "std::option::Option::unwrap" },
+  { path = "std::result::Result::unwrap" },
+]

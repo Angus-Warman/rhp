@@ -107,7 +107,7 @@ impl Evaluator {
                     Some(expr) => self.eval_expr(expr, env.clone()).await?,
                     None => Value::Null,
                 };
-                let mut env_guard = env.lock().unwrap();
+                let mut env_guard = env.lock().expect("lock poisoned");
                 match kind {
                     VarKind::Const => env_guard.define_const(name, value.clone()),
                     _ => env_guard.define(name, value.clone()),
@@ -122,7 +122,7 @@ impl Evaluator {
                     body: FunctionBody::Block(body.clone()),
                     captured: env.clone(),
                 });
-                env.lock().unwrap().define(name, func);
+                env.lock().expect("lock poisoned").define(name, func);
                 Ok(())
             }
 
@@ -205,11 +205,14 @@ impl Evaluator {
             } => {
                 let iter_val = self.eval_expr(iterable, env.clone()).await?;
                 let loop_env = Env::new_child(env);
-                loop_env.lock().unwrap().define(var, Value::Null);
+                loop_env
+                    .lock()
+                    .expect("lock poisoned")
+                    .define(var, Value::Null);
 
                 match &iter_val {
                     Value::Array(arr) => {
-                        let items = arr.lock().unwrap().clone();
+                        let items = arr.lock().expect("lock poisoned").clone();
                         for item in items {
                             if !self
                                 .eval_for_in_iteration(var, item, &loop_env, body)
@@ -256,7 +259,8 @@ impl Evaluator {
                         }
                     }
                     Value::Object(map) => {
-                        let keys: Vec<String> = map.lock().unwrap().keys().cloned().collect();
+                        let keys: Vec<String> =
+                            map.lock().expect("lock poisoned").keys().cloned().collect();
                         for key in keys {
                             if !self
                                 .eval_for_in_iteration(var, Value::String(key), &loop_env, body)
@@ -330,7 +334,7 @@ impl Evaluator {
     ) -> Result<bool, Signal> {
         loop_env
             .lock()
-            .unwrap()
+            .expect("lock poisoned")
             .set(var, item)
             .map_err(|msg| Signal::Error(EvalError::new(msg, 0..0)))?;
         let iter_env = Env::new_child(loop_env.clone());
@@ -358,7 +362,7 @@ impl Evaluator {
             }
             RawExpr::StringLit(s) => Ok(Value::String(s.clone())),
 
-            RawExpr::Ident(name) => env.lock().unwrap().get(name).ok_or_else(|| {
+            RawExpr::Ident(name) => env.lock().expect("lock poisoned").get(name).ok_or_else(|| {
                 Signal::Error(EvalError::new(
                     format!("undefined variable `{}`", name),
                     expr.span.clone(),
@@ -377,7 +381,9 @@ impl Evaluator {
                 let map = Arc::new(Mutex::new(HashMap::new()));
                 for (key, expr) in pairs {
                     let value = self.eval_expr(expr, env.clone()).await?;
-                    map.lock().unwrap().insert(key.clone(), value);
+                    map.lock()
+                        .expect("lock poisoned")
+                        .insert(key.clone(), value);
                 }
                 Ok(Value::Object(map))
             }
@@ -723,7 +729,7 @@ impl Evaluator {
         match &target.node {
             RawExpr::Ident(name) => {
                 env.lock()
-                    .unwrap()
+                    .expect("lock poisoned")
                     .set(name, value)
                     .map_err(|msg| Signal::Error(EvalError::new(msg, span.clone())))?;
                 Ok(())
@@ -732,7 +738,9 @@ impl Evaluator {
                 let obj = self.eval_expr(object, env).await?;
                 match obj {
                     Value::Object(map) => {
-                        map.lock().unwrap().insert(property.clone(), value);
+                        map.lock()
+                            .expect("lock poisoned")
+                            .insert(property.clone(), value);
                         Ok(())
                     }
                     other => Err(Signal::Error(EvalError::new(
@@ -747,7 +755,7 @@ impl Evaluator {
                 match (&obj, &idx) {
                     (Value::Array(arr), Value::Integer(n)) => {
                         let i = *n as usize;
-                        let mut a = arr.lock().unwrap();
+                        let mut a = arr.lock().expect("lock poisoned");
                         if i < a.len() {
                             a[i] = value;
                             Ok(())
@@ -759,7 +767,9 @@ impl Evaluator {
                         }
                     }
                     (Value::Object(map), Value::String(key)) => {
-                        map.lock().unwrap().insert(key.clone(), value);
+                        map.lock()
+                            .expect("lock poisoned")
+                            .insert(key.clone(), value);
                         Ok(())
                     }
                     _ => Err(Signal::Error(EvalError::new(
@@ -791,12 +801,14 @@ impl Evaluator {
         match obj {
             Value::Object(map) => Ok(map
                 .lock()
-                .unwrap()
+                .expect("lock poisoned")
                 .get(property)
                 .cloned()
                 .unwrap_or(Value::Null)),
             Value::Array(arr) => match property {
-                "length" => Ok(Value::Integer(arr.lock().unwrap().len() as i64)),
+                "length" => Ok(Value::Integer(
+                    arr.lock().expect("lock poisoned").len() as i64
+                )),
                 other => bind_method(obj.clone(), other).ok_or_else(|| {
                     Signal::Error(EvalError::new(
                         format!("array has no property `{}`", other),
@@ -826,11 +838,16 @@ impl Evaluator {
         match (obj, idx) {
             (Value::Array(arr), Value::Integer(n)) => {
                 let i = *n as usize;
-                Ok(arr.lock().unwrap().get(i).cloned().unwrap_or(Value::Null))
+                Ok(arr
+                    .lock()
+                    .expect("lock poisoned")
+                    .get(i)
+                    .cloned()
+                    .unwrap_or(Value::Null))
             }
             (Value::Object(map), Value::String(key)) => Ok(map
                 .lock()
-                .unwrap()
+                .expect("lock poisoned")
                 .get(key.as_str())
                 .cloned()
                 .unwrap_or(Value::Null)),
@@ -912,7 +929,7 @@ impl Evaluator {
             )));
         }
         for (name, value) in params.iter().zip(args) {
-            call_env.lock().unwrap().define(name, value);
+            call_env.lock().expect("lock poisoned").define(name, value);
         }
         Ok(())
     }
@@ -1197,7 +1214,7 @@ fn array_push(a: &Value, args: &[Value]) -> Result<Value, String> {
     let Some(item) = args.first().cloned() else {
         return Err("push: expected an item".to_string());
     };
-    let mut lock = arr.lock().unwrap();
+    let mut lock = arr.lock().expect("lock poisoned");
     lock.push(item);
     Ok(Value::Integer(lock.len() as i64))
 }
@@ -1216,7 +1233,7 @@ fn array_join(a: &Value, args: &[Value]) -> Result<Value, String> {
             ));
         }
     };
-    let lock = arr.lock().unwrap();
+    let lock = arr.lock().expect("lock poisoned");
     let joined = lock
         .iter()
         .map(|v| v.display())
@@ -1229,7 +1246,7 @@ fn array_slice(a: &Value, args: &[Value]) -> Result<Value, String> {
     let Value::Array(arr) = a else {
         unreachable!("bound method receiver")
     };
-    let items = arr.lock().unwrap().clone();
+    let items = arr.lock().expect("lock poisoned").clone();
     let n = items.len() as i64;
     let idx = |arg: Option<&Value>| -> Result<i64, String> {
         match arg {
@@ -1280,7 +1297,7 @@ fn array_index_of(a: &Value, args: &[Value]) -> Result<Value, String> {
         }
         None => 0,
     };
-    let lock = arr.lock().unwrap();
+    let lock = arr.lock().expect("lock poisoned");
     for (i, item) in lock.iter().enumerate().skip(from) {
         if item == target {
             return Ok(Value::Integer(i as i64));
@@ -1297,7 +1314,10 @@ fn array_includes(a: &Value, args: &[Value]) -> Result<Value, String> {
         return Ok(Value::Bool(false));
     };
     Ok(Value::Bool(
-        arr.lock().unwrap().iter().any(|item| item == target),
+        arr.lock()
+            .expect("lock poisoned")
+            .iter()
+            .any(|item| item == target),
     ))
 }
 
@@ -1310,7 +1330,7 @@ fn array_map(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let Some(cb) = args.first().cloned() else {
                 return Ok(method_error("map: expected a function".to_string()));
             };
-            let items = arr.lock().unwrap().clone();
+            let items = arr.lock().expect("lock poisoned").clone();
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.into_iter().enumerate() {
                 match call_value(cb.clone(), vec![item, Value::Integer(i as i64)]).await {
@@ -1330,7 +1350,7 @@ fn array_filter(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let Some(cb) = args.first().cloned() else {
                 return Ok(method_error("filter: expected a function".to_string()));
             };
-            let items = arr.lock().unwrap().clone();
+            let items = arr.lock().expect("lock poisoned").clone();
             let mut out = Vec::new();
             for (i, item) in items.into_iter().enumerate() {
                 match call_value(cb.clone(), vec![item.clone(), Value::Integer(i as i64)]).await {
@@ -1351,7 +1371,7 @@ fn array_for_each(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let Some(cb) = args.first().cloned() else {
                 return Ok(method_error("forEach: expected a function".to_string()));
             };
-            let items = arr.lock().unwrap().clone();
+            let items = arr.lock().expect("lock poisoned").clone();
             for (i, item) in items.into_iter().enumerate() {
                 if let Err(e) = call_value(cb.clone(), vec![item, Value::Integer(i as i64)]).await {
                     return Ok(method_error(format!("forEach: {e}")));
@@ -1369,7 +1389,7 @@ fn array_reduce(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let Some(cb) = args.first().cloned() else {
                 return Ok(method_error("reduce: expected a function".to_string()));
             };
-            let items = arr.lock().unwrap().clone();
+            let items = arr.lock().expect("lock poisoned").clone();
             let (mut acc, start) = match args.get(1) {
                 Some(init) => (init.clone(), 0),
                 None => match items.first() {
@@ -1401,7 +1421,7 @@ fn array_sort(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
     Arc::new(move |args| {
         let arr = arr.clone();
         Box::pin(async move {
-            let mut items = arr.lock().unwrap().clone();
+            let mut items = arr.lock().expect("lock poisoned").clone();
             match args.first() {
                 Some(Value::Function(cb)) => {
                     // Insertion sort so the async comparator can be awaited.
@@ -1436,7 +1456,7 @@ fn array_sort(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
                     )));
                 }
             }
-            *arr.lock().unwrap() = items.clone();
+            *arr.lock().expect("lock poisoned") = items.clone();
             Ok(Value::Array(arr))
         })
     })

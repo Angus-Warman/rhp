@@ -45,28 +45,41 @@ impl SocketRegistry {
 
     fn register(&self, state: Arc<Mutex<ClientState>>) -> Uuid {
         let uuid = Uuid::new_v4();
-        self.clients.lock().unwrap().insert(uuid, state);
+        self.clients
+            .lock()
+            .expect("lock poisoned")
+            .insert(uuid, state);
         uuid
     }
 
     fn remove(&self, uuid: Uuid) {
-        self.clients.lock().unwrap().remove(&uuid);
+        self.clients.lock().expect("lock poisoned").remove(&uuid);
     }
 
     fn get(&self, uuid: Uuid) -> Option<Arc<Mutex<ClientState>>> {
-        self.clients.lock().unwrap().get(&uuid).cloned()
+        self.clients
+            .lock()
+            .expect("lock poisoned")
+            .get(&uuid)
+            .cloned()
     }
 
     fn members(&self, selection: &Selection, self_uuid: Uuid) -> Vec<Uuid> {
-        let clients = self.clients.lock().unwrap();
-        let self_group = clients
-            .get(&self_uuid)
-            .map(|s| s.lock().unwrap().inner.lock().unwrap().group.clone());
+        let clients = self.clients.lock().expect("lock poisoned");
+        let self_group = clients.get(&self_uuid).map(|s| {
+            s.lock()
+                .expect("lock poisoned")
+                .inner
+                .lock()
+                .expect("lock poisoned")
+                .group
+                .clone()
+        });
 
         let mut out = Vec::new();
         for (uuid, state) in clients.iter() {
-            let state_guard = state.lock().unwrap();
-            let inner = state_guard.inner.lock().unwrap();
+            let state_guard = state.lock().expect("lock poisoned");
+            let inner = state_guard.inner.lock().expect("lock poisoned");
             if inner.closing {
                 continue;
             }
@@ -197,7 +210,13 @@ pub fn socket_value(socket: &SocketRef) -> Value {
                         }
                     };
                     if let Some(state) = registry.get(uuid) {
-                        state.lock().unwrap().inner.lock().unwrap().group = name;
+                        state
+                            .lock()
+                            .expect("lock poisoned")
+                            .inner
+                            .lock()
+                            .expect("lock poisoned")
+                            .group = name;
                     }
                     Ok(Value::Null)
                 })
@@ -236,7 +255,7 @@ fn group_value(registry: Arc<SocketRegistry>, uuid: Uuid, selection: Selection) 
                         if let Some(state) = registry.get(member) {
                             let _ = state
                                 .lock()
-                                .unwrap()
+                                .expect("lock poisoned")
                                 .tx
                                 .try_send(Message::Text(text.clone().into()));
                         }
@@ -350,8 +369,13 @@ fn group_value(registry: Arc<SocketRegistry>, uuid: Uuid, selection: Selection) 
                             }
                         }
                         if let Some(state) = registry.get(uuid) {
-                            state.lock().unwrap().inner.lock().unwrap().on_message =
-                                args.first().cloned();
+                            state
+                                .lock()
+                                .expect("lock poisoned")
+                                .inner
+                                .lock()
+                                .expect("lock poisoned")
+                                .on_message = args.first().cloned();
                         }
                         Ok(Value::Null)
                     })
@@ -382,8 +406,13 @@ fn group_value(registry: Arc<SocketRegistry>, uuid: Uuid, selection: Selection) 
                             }
                         }
                         if let Some(state) = registry.get(uuid) {
-                            state.lock().unwrap().inner.lock().unwrap().on_close =
-                                args.first().cloned();
+                            state
+                                .lock()
+                                .expect("lock poisoned")
+                                .inner
+                                .lock()
+                                .expect("lock poisoned")
+                                .on_close = args.first().cloned();
                         }
                         Ok(Value::Null)
                     })
@@ -415,7 +444,7 @@ fn client_value(registry: Arc<SocketRegistry>, target: Uuid) -> Value {
                     if let Some(state) = registry.get(target) {
                         let _ = state
                             .lock()
-                            .unwrap()
+                            .expect("lock poisoned")
                             .tx
                             .try_send(Message::Text(text.into()));
                     }
@@ -540,8 +569,13 @@ pub async fn run_socket(
 
 async fn fire_on_message(state: &Arc<Mutex<ClientState>>, args: Vec<Value>) {
     let callback = {
-        let state_guard = state.lock().unwrap();
-        state_guard.inner.lock().unwrap().on_message.clone()
+        let state_guard = state.lock().expect("lock poisoned");
+        state_guard
+            .inner
+            .lock()
+            .expect("lock poisoned")
+            .on_message
+            .clone()
     };
     if let Some(callback) = callback {
         let _ = call_value(callback, args).await;
@@ -550,8 +584,8 @@ async fn fire_on_message(state: &Arc<Mutex<ClientState>>, args: Vec<Value>) {
 
 async fn teardown(registry: &Arc<SocketRegistry>, state: &Arc<Mutex<ClientState>>, uuid: Uuid) {
     let callback = {
-        let state_guard = state.lock().unwrap();
-        let mut inner = state_guard.inner.lock().unwrap();
+        let state_guard = state.lock().expect("lock poisoned");
+        let mut inner = state_guard.inner.lock().expect("lock poisoned");
         inner.closing = true;
         inner.on_close.take()
     };

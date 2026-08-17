@@ -346,7 +346,7 @@ impl<'a> Parser<'a> {
     fn expect_ident(&mut self, msg: &str) -> Result<String, ParseError> {
         match self.peek() {
             Some(Token::Ident(_)) => {
-                let t = self.advance().unwrap();
+                let t = self.advance().expect("peek matched Ident");
                 if let Token::Ident(s) = &t.node {
                     Ok(s.clone())
                 } else {

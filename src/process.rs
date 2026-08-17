@@ -121,7 +121,10 @@ fn parse_body(method: Method, headers: &HeaderMap, bytes: &[u8]) -> Result<Value
                 .or_insert(Value::String(value.clone()));
             let arr_key = format!("{key}s");
             match map.get_mut(&arr_key) {
-                Some(Value::Array(arr)) => arr.lock().unwrap().push(Value::String(value)),
+                Some(Value::Array(arr)) => arr
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(Value::String(value)),
                 _ => {
                     map.insert(
                         arr_key,
@@ -190,10 +193,10 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String
 
 /// True once the script set a body or redirect via RES.
 fn response_owns_body(env: &Arc<Mutex<Env>>) -> bool {
-    let Some(Value::Object(map)) = env.lock().unwrap().get("RES") else {
+    let Some(Value::Object(map)) = env.lock().expect("lock poisoned").get("RES") else {
         return false;
     };
-    let lock = map.lock().unwrap();
+    let lock = map.lock().expect("lock poisoned");
     lock.contains_key("_body") || lock.contains_key("_redirect")
 }
 
@@ -207,7 +210,7 @@ pub async fn process_socket_src(src: String, context: Context, conn: DbConn) -> 
         if let Section::Code { code, method } = section
             && method.matches(&context.method)
         {
-            let tokens = lexer::lex_code(&code).unwrap();
+            let tokens = lexer::lex_code(&code).expect("lexer error in already-validated script");
             let (stmts, _) = Parser::parse(tokens, &code);
             let mut evaluator = Evaluator::new();
             let _ = evaluator.eval_stmts(&stmts, env.clone()).await;
@@ -276,10 +279,10 @@ impl HttpResponse {
     /// global, if any.
     pub fn from_env(env: &Arc<Mutex<Env>>) -> Self {
         let mut response = Self::default();
-        let Some(Value::Object(map)) = env.lock().unwrap().get("RES") else {
+        let Some(Value::Object(map)) = env.lock().expect("lock poisoned").get("RES") else {
             return response;
         };
-        let lock = map.lock().unwrap();
+        let lock = map.lock().expect("lock poisoned");
         if let Some(Value::Float(n)) = lock.get("_status") {
             response.status = Some(*n as u16);
         } else if let Some(Value::Integer(n)) = lock.get("_status") {
@@ -295,7 +298,7 @@ impl HttpResponse {
             response.content_type = Some(ct.clone());
         }
         if let Some(Value::Object(headers)) = lock.get("_headers") {
-            let header_lock = headers.lock().unwrap();
+            let header_lock = headers.lock().expect("lock poisoned");
             let mut pairs: Vec<(String, String)> = header_lock
                 .iter()
                 .filter_map(|(k, v)| match v {
@@ -307,7 +310,7 @@ impl HttpResponse {
             response.headers = pairs;
         }
         if let Some(Value::Array(cookies)) = lock.get("_cookies") {
-            let cookie_lock = cookies.lock().unwrap();
+            let cookie_lock = cookies.lock().expect("lock poisoned");
             for cookie in cookie_lock.iter() {
                 if let Value::String(c) = cookie {
                     response.headers.push(("set-cookie".to_string(), c.clone()));
@@ -416,7 +419,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
     {
         // Scopes env_mut
-        let mut env_mut = env.lock().unwrap();
+        let mut env_mut = env.lock().expect("lock poisoned");
         env_mut.define("VERSION", value::Value::String("0.0.1".to_string()));
 
         let query_map: HashMap<String, Value> = context
@@ -649,7 +652,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                         _ => unreachable!(),
                                     })
                                     .min()
-                                    .unwrap();
+                                    .expect("nums is non-empty");
                                 Ok(Value::Integer(min))
                             } else {
                                 let min = nums
@@ -683,7 +686,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                         _ => unreachable!(),
                                     })
                                     .max()
-                                    .unwrap();
+                                    .expect("nums is non-empty");
                                 Ok(Value::Integer(max))
                             } else {
                                 let max = nums
@@ -753,13 +756,13 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         match args.first() {
                             Some(Value::Float(n)) if *n >= 100.0 && *n <= 599.0 => {
                                 map.lock()
-                                    .unwrap()
+                                    .expect("lock poisoned")
                                     .insert("_status".to_string(), Value::Float(*n));
                                 Ok(Value::Null)
                             }
                             Some(Value::Integer(n)) if *n >= 100 && *n <= 599 => {
                                 map.lock()
-                                    .unwrap()
+                                    .expect("lock poisoned")
                                     .insert("_status".to_string(), Value::Integer(*n));
                                 Ok(Value::Null)
                             }
@@ -784,14 +787,14 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     Box::pin(async move {
                         match (args.first(), args.get(1)) {
                             (Some(Value::String(name)), Some(Value::String(value))) => {
-                                let mut lock = map.lock().unwrap();
+                                let mut lock = map.lock().expect("lock poisoned");
                                 let headers =
                                     lock.entry("_headers".to_string()).or_insert_with(|| {
                                         Value::Object(Arc::new(Mutex::new(HashMap::new())))
                                     });
                                 if let Value::Object(h) = headers {
                                     h.lock()
-                                        .unwrap()
+                                        .expect("lock poisoned")
                                         .insert(name.clone(), Value::String(value.clone()));
                                 }
                                 Ok(Value::Null)
@@ -815,7 +818,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                             (Some(Value::String(name)), Some(Value::String(value))) => {
                                 let opts = args.get(2).and_then(|v| match v {
                                     Value::Object(o) => {
-                                        let lock = o.lock().unwrap();
+                                        let lock = o.lock().expect("lock poisoned");
                                         let map: HashMap<String, Value> = lock.clone();
                                         Some(map)
                                     }
@@ -839,12 +842,14 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                         parts.push(format!("SameSite={s}"));
                                     }
                                 }
-                                let mut lock = map.lock().unwrap();
+                                let mut lock = map.lock().expect("lock poisoned");
                                 let cookies = lock
                                     .entry("_cookies".to_string())
                                     .or_insert_with(|| Value::Array(Arc::new(Mutex::new(vec![]))));
                                 if let Value::Array(c) = cookies {
-                                    c.lock().unwrap().push(Value::String(parts.join("; ")));
+                                    c.lock()
+                                        .expect("lock poisoned")
+                                        .push(Value::String(parts.join("; ")));
                                 }
                                 Ok(Value::Null)
                             }
@@ -868,7 +873,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         };
                         match serde_json::to_string(&value_to_json(value)) {
                             Ok(text) => {
-                                let mut lock = map.lock().unwrap();
+                                let mut lock = map.lock().expect("lock poisoned");
                                 lock.insert("_body".to_string(), Value::String(text));
                                 lock.insert(
                                     "_content_type".to_string(),
@@ -903,7 +908,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                 return Ok(error_value("RES.Html: expected a string"));
                             }
                         };
-                        let mut lock = map.lock().unwrap();
+                        let mut lock = map.lock().expect("lock poisoned");
                         lock.insert("_body".to_string(), Value::String(html));
                         lock.insert(
                             "_content_type".to_string(),
@@ -935,7 +940,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                 return Ok(error_value("RES.Redirect: expected a URL string"));
                             }
                         };
-                        let mut lock = map.lock().unwrap();
+                        let mut lock = map.lock().expect("lock poisoned");
                         lock.insert("_redirect".to_string(), Value::String(url));
                         if !lock.contains_key("_status") {
                             lock.insert("_status".to_string(), Value::Integer(302));
@@ -949,7 +954,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         let response = Value::Object(response_map.clone());
         {
-            let mut map = response_map.lock().unwrap();
+            let mut map = response_map.lock().expect("lock poisoned");
             map.insert("SetStatus".to_string(), response_set_status);
             map.insert("SetHeader".to_string(), response_set_header);
             map.insert("SetCookie".to_string(), response_set_cookie);
@@ -1275,7 +1280,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
 fn value_to_object(v: &Value) -> Option<serde_json::Map<String, serde_json::Value>> {
     match v {
         Value::Object(o) => {
-            let lock = o.lock().unwrap();
+            let lock = o.lock().expect("lock poisoned");
             Some(
                 lock.iter()
                     .map(|(k, val)| (k.clone(), value_to_json(val)))
@@ -1330,7 +1335,12 @@ fn value_to_numeric(v: &Value) -> Result<Numeric, String> {
 
 fn values_to_numerics(args: Vec<Value>) -> Result<Vec<Numeric>, String> {
     match args.as_slice() {
-        [Value::Array(arr)] => arr.lock().unwrap().iter().map(value_to_numeric).collect(),
+        [Value::Array(arr)] => arr
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(value_to_numeric)
+            .collect(),
         _ => args.iter().map(value_to_numeric).collect(),
     }
 }
@@ -1350,11 +1360,15 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
         }
         Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
         Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Array(a) => {
-            serde_json::Value::Array(a.lock().unwrap().iter().map(value_to_json).collect())
-        }
+        Value::Array(a) => serde_json::Value::Array(
+            a.lock()
+                .expect("lock poisoned")
+                .iter()
+                .map(value_to_json)
+                .collect(),
+        ),
         Value::Object(o) => {
-            let lock = o.lock().unwrap();
+            let lock = o.lock().expect("lock poisoned");
             let mut map = serde_json::Map::new();
             for (k, v) in lock.iter() {
                 map.insert(k.clone(), value_to_json(v));
@@ -1366,11 +1380,14 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
 }
 
 async fn process_script_section(env: Arc<Mutex<Env>>, script: &str) -> String {
-    let tokens = lexer::lex_code(script).unwrap();
+    let tokens = lexer::lex_code(script).expect("lexer error in already-validated script");
     let (stmts, _) = Parser::parse(tokens, script);
     let mut evalulator = Evaluator::new();
 
-    evalulator.eval_stmts(&stmts, env).await.unwrap();
+    evalulator
+        .eval_stmts(&stmts, env)
+        .await
+        .expect("eval error in script section");
     evalulator.output
 }
 

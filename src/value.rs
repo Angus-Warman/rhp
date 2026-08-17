@@ -34,7 +34,11 @@ impl Env {
         if let Some(v) = self.vars.get(name) {
             return Some(v.clone());
         }
-        self.parent.as_ref()?.lock().unwrap().get(name)
+        self.parent
+            .as_ref()?
+            .lock()
+            .expect("lock poisoned")
+            .get(name)
     }
 
     pub fn set(&mut self, name: &str, value: Value) -> Result<(), String> {
@@ -48,9 +52,9 @@ impl Env {
             return Ok(());
         }
         if let Some(parent) = &self.parent
-            && parent.lock().unwrap().has(name)
+            && parent.lock().expect("lock poisoned").has(name)
         {
-            return parent.lock().unwrap().set(name, value);
+            return parent.lock().expect("lock poisoned").set(name, value);
         }
         self.vars.insert(name.to_string(), value);
         Ok(())
@@ -74,7 +78,7 @@ impl Env {
         }
         self.parent
             .as_ref()
-            .is_some_and(|p| p.lock().unwrap().has(name))
+            .is_some_and(|p| p.lock().expect("lock poisoned").has(name))
     }
 }
 
@@ -258,7 +262,7 @@ impl Value {
             Value::Array(_) => true,
             Value::Function(_) => true,
             Value::Object(o) => {
-                let obj = o.lock().unwrap();
+                let obj = o.lock().expect("lock poisoned");
 
                 if obj.is_empty() {
                     return false;
@@ -306,7 +310,7 @@ impl Value {
             Value::Array(a) => {
                 let items: Vec<String> = a
                     .lock()
-                    .unwrap()
+                    .expect("lock poisoned")
                     .iter()
                     .map(|v| v.display_in_container())
                     .collect();
@@ -315,7 +319,7 @@ impl Value {
             Value::Object(o) => {
                 let mut pairs: Vec<(String, String)> = o
                     .lock()
-                    .unwrap()
+                    .expect("lock poisoned")
                     .iter()
                     .map(|(k, v)| (k.clone(), v.display_in_container()))
                     .collect();
