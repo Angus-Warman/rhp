@@ -257,8 +257,8 @@ fn group_value(registry: Arc<SocketRegistry>, uuid: Uuid, selection: Selection) 
                 let registry = registry.clone();
                 let selection = selection.clone();
                 Box::pin(async move {
-                    Ok(Value::Number(
-                        registry.members(&selection, uuid).len() as f64
+                    Ok(Value::Integer(
+                        registry.members(&selection, uuid).len() as i64
                     ))
                 })
             }

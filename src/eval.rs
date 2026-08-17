@@ -219,15 +219,21 @@ impl Evaluator {
                             }
                         }
                     }
-                    Value::Number(n) => {
-                        for i in 0..n.floor() as i64 {
+                    Value::Float(f) => {
+                        // TODO remove this? kind of weird
+                        for i in 0..f.floor() as i64 {
                             if !self
-                                .eval_for_in_iteration(
-                                    var,
-                                    Value::Number(i as f64),
-                                    &loop_env,
-                                    body,
-                                )
+                                .eval_for_in_iteration(var, Value::Integer(i), &loop_env, body)
+                                .await?
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    Value::Integer(i) => {
+                        for idx in 0..*i {
+                            if !self
+                                .eval_for_in_iteration(var, Value::Integer(idx), &loop_env, body)
                                 .await?
                             {
                                 break;
@@ -343,7 +349,13 @@ impl Evaluator {
         match &expr.node {
             RawExpr::Null => Ok(Value::Null),
             RawExpr::Bool(b) => Ok(Value::Bool(*b)),
-            RawExpr::Number(n) => Ok(Value::Number(n.parse::<f64>().unwrap_or(0.0))),
+            RawExpr::Number(n) => {
+                if n.contains(".") {
+                    return Ok(Value::Float(n.parse::<f64>().unwrap_or(0.0)));
+                } else {
+                    return Ok(Value::Integer(n.parse::<i64>().unwrap_or(0)));
+                }
+            }
             RawExpr::StringLit(s) => Ok(Value::String(s.clone())),
 
             RawExpr::Ident(name) => env.lock().unwrap().get(name).ok_or_else(|| {
@@ -505,7 +517,8 @@ impl Evaluator {
             PrefixOp::Neg => {
                 let v = self.eval_expr(expr, env).await?;
                 match v {
-                    Value::Number(n) => Ok(Value::Number(-n)),
+                    Value::Float(n) => Ok(Value::Float(-n)),
+                    Value::Integer(n) => Ok(Value::Integer(-n)),
                     other => Err(Signal::Error(EvalError::new(
                         format!("cannot negate {}", other.type_name()),
                         span.clone(),
@@ -556,8 +569,15 @@ impl Evaluator {
         span: &std::ops::Range<usize>,
     ) -> Result<Value, Signal> {
         let current = self.eval_expr(target, env.clone()).await?;
-        let n = match current {
-            Value::Number(n) => n,
+        let new_val = match current {
+            Value::Float(n) => Value::Float(n + delta),
+            Value::Integer(n) => {
+                if delta.fract() == 0.0 {
+                    Value::Integer(n + delta as i64)
+                } else {
+                    Value::Float(n as f64 + delta)
+                }
+            }
             other => {
                 return Err(Signal::Error(EvalError::new(
                     format!("++ / -- requires a number, got {}", other.type_name()),
@@ -565,7 +585,6 @@ impl Evaluator {
                 )));
             }
         };
-        let new_val = Value::Number(n + delta);
         self.write_target(target, new_val.clone(), env, span)
             .await?;
         Ok(new_val)
@@ -608,7 +627,10 @@ impl Evaluator {
 
         match op {
             BinOp::Add => match (&l, &r) {
-                (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+                (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
+                (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
                 // String coercion: if either side is a string, concatenate
                 _ => Ok(Value::String(format!("{}{}", l.display(), r.display()))),
             },
@@ -649,13 +671,19 @@ impl Evaluator {
         } else {
             let current = self.eval_expr(target, env.clone()).await?;
             match (op, &current, &rhs) {
-                (AssignOp::Add, Value::Number(a), Value::Number(b)) => Value::Number(a + b),
+                (AssignOp::Add, Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+                (AssignOp::Add, Value::Float(a), Value::Integer(b)) => Value::Float(a + *b as f64),
+                (AssignOp::Add, Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 + b),
+                (AssignOp::Add, Value::Integer(a), Value::Integer(b)) => Value::Integer(a + b),
                 (AssignOp::Add, _, _) => {
                     Value::String(format!("{}{}", current.display(), rhs.display()))
                 }
-                (AssignOp::Sub, Value::Number(a), Value::Number(b)) => Value::Number(a - b),
-                (AssignOp::Mul, Value::Number(a), Value::Number(b)) => Value::Number(a * b),
-                (AssignOp::Div, Value::Number(a), Value::Number(b)) => Value::Number(a / b),
+                (AssignOp::Sub, Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+                (AssignOp::Sub, Value::Integer(a), Value::Integer(b)) => Value::Integer(a - b),
+                (AssignOp::Mul, Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                (AssignOp::Mul, Value::Integer(a), Value::Integer(b)) => Value::Integer(a * b),
+                (AssignOp::Div, Value::Float(a), Value::Float(b)) => Value::Float(a / b),
+                (AssignOp::Div, Value::Integer(a), Value::Integer(b)) => Value::Integer(a / b),
                 _ => {
                     return Err(Signal::Error(EvalError::new(
                         "invalid operand types for compound assignment",
@@ -704,7 +732,7 @@ impl Evaluator {
                 let obj = self.eval_expr(object, env.clone()).await?;
                 let idx = self.eval_expr(index, env).await?;
                 match (&obj, &idx) {
-                    (Value::Array(arr), Value::Number(n)) => {
+                    (Value::Array(arr), Value::Integer(n)) => {
                         let i = *n as usize;
                         let mut a = arr.lock().unwrap();
                         if i < a.len() {
@@ -744,9 +772,7 @@ impl Evaluator {
     ) -> EvalResult {
         // `x.type` reports the runtime type for any non-object value. Objects
         // keep their own `type` field (e.g. `{ type: "person" }`).
-        if property == "type"
-            && !matches!(obj, Value::Object(_) | Value::Function(_))
-        {
+        if property == "type" && !matches!(obj, Value::Object(_) | Value::Function(_)) {
             return Ok(Value::String(obj.type_name().to_string()));
         }
         match obj {
@@ -757,7 +783,7 @@ impl Evaluator {
                 .cloned()
                 .unwrap_or(Value::Null)),
             Value::Array(arr) => match property {
-                "length" => Ok(Value::Number(arr.lock().unwrap().len() as f64)),
+                "length" => Ok(Value::Integer(arr.lock().unwrap().len() as i64)),
                 other => bind_method(obj.clone(), other).ok_or_else(|| {
                     Signal::Error(EvalError::new(
                         format!("array has no property `{}`", other),
@@ -766,7 +792,7 @@ impl Evaluator {
                 }),
             },
             Value::String(s) => match property {
-                "length" => Ok(Value::Number(s.len() as f64)),
+                "length" => Ok(Value::Integer(s.len() as i64)),
                 other => bind_method(obj.clone(), other).ok_or_else(|| {
                     Signal::Error(EvalError::new(
                         format!("string has no property `{}`", other),
@@ -785,7 +811,7 @@ impl Evaluator {
 
     fn eval_index(&self, obj: &Value, idx: &Value, span: &std::ops::Range<usize>) -> EvalResult {
         match (obj, idx) {
-            (Value::Array(arr), Value::Number(n)) => {
+            (Value::Array(arr), Value::Integer(n)) => {
                 let i = *n as usize;
                 Ok(arr.lock().unwrap().get(i).cloned().unwrap_or(Value::Null))
             }
@@ -909,11 +935,21 @@ pub async fn call_value(value: Value, args: Vec<Value>) -> Result<Value, EvalErr
 fn numeric_op(
     l: Value,
     r: Value,
-    op: impl Fn(f64, f64) -> f64,
+    op: impl Fn(Numeric, Numeric) -> Numeric,
     span: &std::ops::Range<usize>,
 ) -> EvalResult {
     match (&l, &r) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(op(*a, *b))),
+        (Value::Float(a), Value::Float(b)) => Ok(op(Numeric::Float(*a), Numeric::Float(*b)).into()),
+        (Value::Float(a), Value::Integer(b)) => {
+            Ok(op(Numeric::Float(*a), Numeric::Float(*b as f64)).into())
+        }
+        (Value::Integer(a), Value::Float(b)) => {
+            Ok(op(Numeric::Float(*a as f64), Numeric::Float(*b)).into())
+        }
+        (Value::Integer(a), Value::Integer(b)) => {
+            Ok(op(Numeric::Integer(*a), Numeric::Integer(*b)).into())
+        }
+
         _ => Err(Signal::Error(EvalError::new(
             format!(
                 "arithmetic requires numbers, got {} and {}",
@@ -928,20 +964,30 @@ fn numeric_op(
 fn compare(
     l: Value,
     r: Value,
-    op: impl Fn(f64, f64) -> bool,
+    op: impl Fn(Numeric, Numeric) -> bool,
     span: &std::ops::Range<usize>,
 ) -> EvalResult {
     match (&l, &r) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(op(*a, *b))),
+        (Value::Float(a), Value::Float(b)) => {
+            Ok(Value::Bool(op(Numeric::Float(*a), Numeric::Float(*b))))
+        }
+        (Value::Float(a), Value::Integer(b)) => Ok(Value::Bool(op(
+            Numeric::Float(*a),
+            Numeric::Float(*b as f64),
+        ))),
+        (Value::Integer(a), Value::Float(b)) => Ok(Value::Bool(op(
+            Numeric::Float(*a as f64),
+            Numeric::Float(*b),
+        ))),
+        (Value::Integer(a), Value::Integer(b)) => {
+            Ok(Value::Bool(op(Numeric::Integer(*a), Numeric::Integer(*b))))
+        }
+
         (Value::String(a), Value::String(b)) => {
-            let ord = a.cmp(b);
+            let ord = a.cmp(b) as i8; // -1, 0, 1
             Ok(Value::Bool(op(
-                match ord {
-                    std::cmp::Ordering::Less => -1.0,
-                    std::cmp::Ordering::Equal => 0.0,
-                    std::cmp::Ordering::Greater => 1.0,
-                },
-                0.0,
+                Numeric::Integer(ord as i64),
+                Numeric::Integer(0),
             )))
         }
         _ => Err(Signal::Error(EvalError::new(
@@ -954,7 +1000,10 @@ fn compare(
 fn loose_eq(l: &Value, r: &Value) -> bool {
     match (l, r) {
         (Value::Null, Value::Null) => true,
-        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Float(a), Value::Integer(b)) => *a == *b as f64,
+        (Value::Integer(a), Value::Float(b)) => *a as f64 == *b,
+        (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         // null == null only, not null == 0 etc, keep it sane
@@ -1118,7 +1167,7 @@ fn array_push(a: &Value, args: &[Value]) -> Result<Value, String> {
     };
     let mut lock = arr.lock().unwrap();
     lock.push(item);
-    Ok(Value::Number(lock.len() as f64))
+    Ok(Value::Integer(lock.len() as i64))
 }
 
 fn array_join(a: &Value, args: &[Value]) -> Result<Value, String> {
@@ -1153,8 +1202,15 @@ fn array_slice(a: &Value, args: &[Value]) -> Result<Value, String> {
     let idx = |arg: Option<&Value>| -> Result<i64, String> {
         match arg {
             None => Ok(n),
-            Some(Value::Number(x)) => {
+            Some(Value::Float(x)) => {
                 let mut i = x.round() as i64;
+                if i < 0 {
+                    i += n;
+                }
+                Ok(i.max(0).min(n))
+            }
+            Some(Value::Integer(x)) => {
+                let mut i = *x;
                 if i < 0 {
                     i += n;
                 }
@@ -1179,10 +1235,11 @@ fn array_index_of(a: &Value, args: &[Value]) -> Result<Value, String> {
         unreachable!("bound method receiver")
     };
     let Some(target) = args.first() else {
-        return Ok(Value::Number(-1.0));
+        return Ok(Value::Integer(-1));
     };
     let from = match args.get(1) {
-        Some(Value::Number(n)) => n.round().max(0.0) as usize,
+        Some(Value::Float(n)) => n.round().max(0.0) as usize,
+        Some(Value::Integer(n)) => (*n).max(0) as usize,
         Some(other) => {
             return Err(format!(
                 "indexOf: expected a number fromIndex, got {}",
@@ -1194,10 +1251,10 @@ fn array_index_of(a: &Value, args: &[Value]) -> Result<Value, String> {
     let lock = arr.lock().unwrap();
     for (i, item) in lock.iter().enumerate().skip(from) {
         if item == target {
-            return Ok(Value::Number(i as f64));
+            return Ok(Value::Integer(i as i64));
         }
     }
-    Ok(Value::Number(-1.0))
+    Ok(Value::Integer(-1))
 }
 
 fn array_includes(a: &Value, args: &[Value]) -> Result<Value, String> {
@@ -1207,7 +1264,9 @@ fn array_includes(a: &Value, args: &[Value]) -> Result<Value, String> {
     let Some(target) = args.first() else {
         return Ok(Value::Bool(false));
     };
-    Ok(Value::Bool(arr.lock().unwrap().iter().any(|item| item == target)))
+    Ok(Value::Bool(
+        arr.lock().unwrap().iter().any(|item| item == target),
+    ))
 }
 
 // ---- Callback-taking array methods (await script functions) ----
@@ -1222,7 +1281,7 @@ fn array_map(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let items = arr.lock().unwrap().clone();
             let mut out = Vec::with_capacity(items.len());
             for (i, item) in items.into_iter().enumerate() {
-                match call_value(cb.clone(), vec![item, Value::Number(i as f64)]).await {
+                match call_value(cb.clone(), vec![item, Value::Integer(i as i64)]).await {
                     Ok(v) => out.push(v),
                     Err(e) => return Ok(method_error(format!("map: {e}"))),
                 }
@@ -1242,7 +1301,7 @@ fn array_filter(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             let items = arr.lock().unwrap().clone();
             let mut out = Vec::new();
             for (i, item) in items.into_iter().enumerate() {
-                match call_value(cb.clone(), vec![item.clone(), Value::Number(i as f64)]).await {
+                match call_value(cb.clone(), vec![item.clone(), Value::Integer(i as i64)]).await {
                     Ok(v) if v.is_truthy() => out.push(item),
                     Ok(_) => {}
                     Err(e) => return Ok(method_error(format!("filter: {e}"))),
@@ -1262,7 +1321,7 @@ fn array_for_each(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
             };
             let items = arr.lock().unwrap().clone();
             for (i, item) in items.into_iter().enumerate() {
-                if let Err(e) = call_value(cb.clone(), vec![item, Value::Number(i as f64)]).await {
+                if let Err(e) = call_value(cb.clone(), vec![item, Value::Integer(i as i64)]).await {
                     return Ok(method_error(format!("forEach: {e}")));
                 }
             }
@@ -1290,10 +1349,10 @@ fn array_reduce(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
                     }
                 },
             };
-            for i in start..items.len() {
+            for (i, item) in items.iter().enumerate().skip(start) {
                 match call_value(
                     cb.clone(),
-                    vec![acc, items[i].clone(), Value::Number(i as f64)],
+                    vec![acc, item.clone(), Value::Integer(i as i64)],
                 )
                 .await
                 {
@@ -1323,7 +1382,8 @@ fn array_sort(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
                             )
                             .await
                             {
-                                Ok(Value::Number(n)) => n,
+                                Ok(Value::Float(n)) => n,
+                                Ok(Value::Integer(n)) => n as f64,
                                 Ok(_) => 0.0,
                                 Err(e) => return Ok(method_error(format!("sort: {e}"))),
                             };
@@ -1352,7 +1412,14 @@ fn array_sort(arr: Arc<Mutex<Vec<Value>>>) -> NativeFn {
 
 fn value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Integer(x), Value::Integer(y)) => x.cmp(y),
+        (Value::Float(x), Value::Integer(y)) => x
+            .partial_cmp(&(*y as f64))
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Integer(x), Value::Float(y)) => (*x as f64)
+            .partial_cmp(y)
+            .unwrap_or(std::cmp::Ordering::Equal),
         _ => a.display().cmp(&b.display()),
     }
 }

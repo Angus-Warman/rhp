@@ -609,7 +609,10 @@ async fn test_typeof_operator() {
     );
 
     // Objects keep their own `type` field.
-    assert_eq!(test_process(r#"return { type: "person" }.type"#).await, "person");
+    assert_eq!(
+        test_process(r#"return { type: "person" }.type"#).await,
+        "person"
+    );
 }
 
 #[tokio::test]

@@ -7,8 +7,8 @@ use axum::extract::{Query, Request};
 use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
 
-use crate::db::DbConn;
 use crate::ws::SocketRef;
+use crate::{db::DbConn, value::Numeric};
 use crate::{
     eval::Evaluator,
     lexer,
@@ -146,7 +146,7 @@ fn json_to_value(json: serde_json::Value) -> Value {
     match json {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Array(items) => {
             let vals = items.into_iter().map(json_to_value).collect::<Vec<_>>();
@@ -280,7 +280,9 @@ impl HttpResponse {
             return response;
         };
         let lock = map.lock().unwrap();
-        if let Some(Value::Number(n)) = lock.get("_status") {
+        if let Some(Value::Float(n)) = lock.get("_status") {
+            response.status = Some(*n as u16);
+        } else if let Some(Value::Integer(n)) = lock.get("_status") {
             response.status = Some(*n as u16);
         }
         if let Some(Value::String(url)) = lock.get("_redirect") {
@@ -510,21 +512,21 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         let time_sec = Value::Function(Function {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|_args| {
-                Box::pin(async move { Ok(Value::Number(unix_time().as_secs() as f64)) })
+                Box::pin(async move { Ok(Value::Integer(unix_time().as_secs() as i64)) })
             })),
             captured: Env::new_root(),
         });
         let time_ms = Value::Function(Function {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|_args| {
-                Box::pin(async move { Ok(Value::Number(unix_time().as_millis() as f64)) })
+                Box::pin(async move { Ok(Value::Integer(unix_time().as_millis() as i64)) })
             })),
             captured: Env::new_root(),
         });
         let time_ns = Value::Function(Function {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|_args| {
-                Box::pin(async move { Ok(Value::Number(unix_time().as_nanos() as f64)) })
+                Box::pin(async move { Ok(Value::Integer(unix_time().as_nanos() as i64)) })
             })),
             captured: Env::new_root(),
         });
@@ -543,7 +545,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         let math_random = Value::Function(Function {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|_args| {
-                Box::pin(async move { Ok(Value::Number(random_f64())) })
+                Box::pin(async move { Ok(Value::Float(random_f64())) })
             })),
             captured: Env::new_root(),
         });
@@ -553,7 +555,8 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
                     match args.first() {
-                        Some(Value::Number(n)) => Ok(Value::Number(n.ceil())),
+                        Some(Value::Float(n)) => Ok(Value::Float(n.ceil())),
+                        Some(Value::Integer(n)) => Ok(Value::Integer(*n)),
                         Some(other) => Ok(error_value(format!(
                             "MATH.Ceil: expected a number, got {}",
                             other.type_name()
@@ -570,7 +573,8 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
                     match args.first() {
-                        Some(Value::Number(n)) => Ok(Value::Number(n.floor())),
+                        Some(Value::Float(n)) => Ok(Value::Float(n.floor())),
+                        Some(Value::Integer(n)) => Ok(Value::Integer(*n)),
                         Some(other) => Ok(error_value(format!(
                             "MATH.Floor: expected a number, got {}",
                             other.type_name()
@@ -586,11 +590,14 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
-                    match math_numbers(args) {
+                    match values_to_numerics(args) {
                         Ok(nums) if nums.is_empty() => {
                             Ok(error_value("MATH.Avg: expected at least one number"))
                         }
-                        Ok(nums) => Ok(Value::Number(nums.iter().sum::<f64>() / nums.len() as f64)),
+                        Ok(nums) => {
+                            let sum: f64 = nums.iter().map(|n| n.to_f64()).sum();
+                            Ok(Value::Float(sum / nums.len() as f64))
+                        }
                         Err(msg) => Ok(error_value(format!("MATH.Avg: {msg}"))),
                     }
                 })
@@ -602,8 +609,22 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
-                    match math_numbers(args) {
-                        Ok(nums) => Ok(Value::Number(nums.iter().sum())),
+                    match values_to_numerics(args) {
+                        Ok(nums) => {
+                            if nums.iter().all(|n| matches!(n, Numeric::Integer(_))) {
+                                let sum: i64 = nums
+                                    .iter()
+                                    .map(|n| match n {
+                                        Numeric::Integer(i) => *i,
+                                        _ => unreachable!(),
+                                    })
+                                    .sum();
+                                Ok(Value::Integer(sum))
+                            } else {
+                                let sum: f64 = nums.iter().map(|n| n.to_f64()).sum();
+                                Ok(Value::Float(sum))
+                            }
+                        }
                         Err(msg) => Ok(error_value(format!("MATH.Sum: {msg}"))),
                     }
                 })
@@ -615,13 +636,29 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
-                    match math_numbers(args) {
+                    match values_to_numerics(args) {
                         Ok(nums) if nums.is_empty() => {
                             Ok(error_value("MATH.Min: expected at least one number"))
                         }
-                        Ok(nums) => Ok(Value::Number(
-                            nums.into_iter().fold(f64::INFINITY, f64::min),
-                        )),
+                        Ok(nums) => {
+                            if nums.iter().all(|n| matches!(n, Numeric::Integer(_))) {
+                                let min = nums
+                                    .iter()
+                                    .map(|n| match n {
+                                        Numeric::Integer(i) => *i,
+                                        _ => unreachable!(),
+                                    })
+                                    .min()
+                                    .unwrap();
+                                Ok(Value::Integer(min))
+                            } else {
+                                let min = nums
+                                    .into_iter()
+                                    .map(|n| n.to_f64())
+                                    .fold(f64::INFINITY, f64::min);
+                                Ok(Value::Float(min))
+                            }
+                        }
                         Err(msg) => Ok(error_value(format!("MATH.Min: {msg}"))),
                     }
                 })
@@ -633,13 +670,29 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             params: vec![],
             body: FunctionBody::Native(Arc::new(|args| {
                 Box::pin(async move {
-                    match math_numbers(args) {
+                    match values_to_numerics(args) {
                         Ok(nums) if nums.is_empty() => {
                             Ok(error_value("MATH.Max: expected at least one number"))
                         }
-                        Ok(nums) => Ok(Value::Number(
-                            nums.into_iter().fold(f64::NEG_INFINITY, f64::max),
-                        )),
+                        Ok(nums) => {
+                            if nums.iter().all(|n| matches!(n, Numeric::Integer(_))) {
+                                let max = nums
+                                    .iter()
+                                    .map(|n| match n {
+                                        Numeric::Integer(i) => *i,
+                                        _ => unreachable!(),
+                                    })
+                                    .max()
+                                    .unwrap();
+                                Ok(Value::Integer(max))
+                            } else {
+                                let max = nums
+                                    .into_iter()
+                                    .map(|n| n.to_f64())
+                                    .fold(f64::NEG_INFINITY, f64::max);
+                                Ok(Value::Float(max))
+                            }
+                        }
                         Err(msg) => Ok(error_value(format!("MATH.Max: {msg}"))),
                     }
                 })
@@ -698,10 +751,16 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                     let map = map.clone();
                     Box::pin(async move {
                         match args.first() {
-                            Some(Value::Number(n)) if *n >= 100.0 && *n <= 599.0 => {
+                            Some(Value::Float(n)) if *n >= 100.0 && *n <= 599.0 => {
                                 map.lock()
                                     .unwrap()
-                                    .insert("_status".to_string(), Value::Number(*n));
+                                    .insert("_status".to_string(), Value::Float(*n));
+                                Ok(Value::Null)
+                            }
+                            Some(Value::Integer(n)) if *n >= 100 && *n <= 599 => {
+                                map.lock()
+                                    .unwrap()
+                                    .insert("_status".to_string(), Value::Integer(*n));
                                 Ok(Value::Null)
                             }
                             Some(other) => Ok(error_value(format!(
@@ -737,9 +796,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                 }
                                 Ok(Value::Null)
                             }
-                            _ => Ok(error_value(
-                                "RES.SetHeader: expected (name, value) strings",
-                            )),
+                            _ => Ok(error_value("RES.SetHeader: expected (name, value) strings")),
                         }
                     })
                 })),
@@ -791,9 +848,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                                 }
                                 Ok(Value::Null)
                             }
-                            _ => Ok(error_value(
-                                "RES.SetCookie: expected (name, value) strings",
-                            )),
+                            _ => Ok(error_value("RES.SetCookie: expected (name, value) strings")),
                         }
                     })
                 })),
@@ -883,7 +938,7 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         let mut lock = map.lock().unwrap();
                         lock.insert("_redirect".to_string(), Value::String(url));
                         if !lock.contains_key("_status") {
-                            lock.insert("_status".to_string(), Value::Number(302.0));
+                            lock.insert("_status".to_string(), Value::Integer(302));
                         }
                         Ok(Value::Null)
                     })
@@ -1119,7 +1174,7 @@ fn table_stmt_to_value(stmt: crate::db::TableStmt) -> Value {
         params: vec![],
         body: FunctionBody::Native(Arc::new(move |_args| {
             let stmt = count_stmt.clone();
-            Box::pin(async move { Ok(Value::Number(stmt.count().await as f64)) })
+            Box::pin(async move { Ok(Value::Integer(stmt.count().await as i64)) })
         })),
         captured: Env::new_root(),
     });
@@ -1265,41 +1320,35 @@ fn random_f64() -> f64 {
     })
 }
 
-fn math_numbers(args: Vec<Value>) -> Result<Vec<f64>, String> {
-    let mut out = Vec::new();
-    if let [Value::Array(arr)] = args.as_slice() {
-        for v in arr.lock().unwrap().iter() {
-            match v {
-                Value::Number(n) => out.push(*n),
-                other => {
-                    return Err(format!("expected numbers, got {}", other.type_name()));
-                }
-            }
-        }
-        return Ok(out);
+fn value_to_numeric(v: &Value) -> Result<Numeric, String> {
+    match v {
+        Value::Float(f) => Ok(Numeric::Float(*f)),
+        Value::Integer(i) => Ok(Numeric::Integer(*i)),
+        other => Err(format!("expected number, got {}", other.type_name())),
     }
-    for v in &args {
-        match v {
-            Value::Number(n) => out.push(*n),
-            other => return Err(format!("expected numbers, got {}", other.type_name())),
-        }
+}
+
+fn values_to_numerics(args: Vec<Value>) -> Result<Vec<Numeric>, String> {
+    match args.as_slice() {
+        [Value::Array(arr)] => arr.lock().unwrap().iter().map(value_to_numeric).collect(),
+        _ => args.iter().map(value_to_numeric).collect(),
     }
-    Ok(out)
 }
 
 pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Number(n) => {
-            if n.fract() == 0.0 && n.abs() < 1e15 {
-                serde_json::Value::Number(serde_json::Number::from(*n as i64))
+        Value::Float(f) => {
+            if f.fract() == 0.0 && f.abs() < 1e15 {
+                serde_json::Value::Number(serde_json::Number::from(*f as i64))
             } else {
-                serde_json::Number::from_f64(*n)
+                serde_json::Number::from_f64(*f)
                     .map(serde_json::Value::Number)
                     .unwrap_or(serde_json::Value::Null)
             }
         }
+        Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
         Value::String(s) => serde_json::Value::String(s.clone()),
         Value::Array(a) => {
             serde_json::Value::Array(a.lock().unwrap().iter().map(value_to_json).collect())

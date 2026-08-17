@@ -84,11 +84,119 @@ impl Env {
 pub enum Value {
     Null,
     Bool(bool),
-    Number(f64),
+    Float(f64),
+    Integer(i64),
     String(String),
     Array(Arc<Mutex<Vec<Value>>>),
     Object(Arc<Mutex<HashMap<String, Value>>>),
     Function(Function),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Numeric {
+    Float(f64),
+    Integer(i64),
+}
+
+impl Numeric {
+    pub fn to_f64(self) -> f64 {
+        match self {
+            Numeric::Float(f) => f,
+            Numeric::Integer(i) => i as f64,
+        }
+    }
+}
+
+impl std::ops::Add for Numeric {
+    type Output = Numeric;
+    fn add(self, rhs: Numeric) -> Numeric {
+        match (self, rhs) {
+            (Numeric::Float(a), Numeric::Float(b)) => Numeric::Float(a + b),
+            (Numeric::Float(a), Numeric::Integer(b)) => Numeric::Float(a + b as f64),
+            (Numeric::Integer(a), Numeric::Float(b)) => Numeric::Float(a as f64 + b),
+            (Numeric::Integer(a), Numeric::Integer(b)) => Numeric::Integer(a + b),
+        }
+    }
+}
+
+impl std::ops::Sub for Numeric {
+    type Output = Numeric;
+    fn sub(self, rhs: Numeric) -> Numeric {
+        match (self, rhs) {
+            (Numeric::Float(a), Numeric::Float(b)) => Numeric::Float(a - b),
+            (Numeric::Float(a), Numeric::Integer(b)) => Numeric::Float(a - b as f64),
+            (Numeric::Integer(a), Numeric::Float(b)) => Numeric::Float(a as f64 - b),
+            (Numeric::Integer(a), Numeric::Integer(b)) => Numeric::Integer(a - b),
+        }
+    }
+}
+
+impl std::ops::Mul for Numeric {
+    type Output = Numeric;
+    fn mul(self, rhs: Numeric) -> Numeric {
+        match (self, rhs) {
+            (Numeric::Float(a), Numeric::Float(b)) => Numeric::Float(a * b),
+            (Numeric::Float(a), Numeric::Integer(b)) => Numeric::Float(a * b as f64),
+            (Numeric::Integer(a), Numeric::Float(b)) => Numeric::Float(a as f64 * b),
+            (Numeric::Integer(a), Numeric::Integer(b)) => Numeric::Integer(a * b),
+        }
+    }
+}
+
+impl std::ops::Div for Numeric {
+    type Output = Numeric;
+    fn div(self, rhs: Numeric) -> Numeric {
+        match (self, rhs) {
+            (Numeric::Float(a), Numeric::Float(b)) => Numeric::Float(a / b),
+            (Numeric::Float(a), Numeric::Integer(b)) => Numeric::Float(a / b as f64),
+            (Numeric::Integer(a), Numeric::Float(b)) => Numeric::Float(a as f64 / b),
+            (Numeric::Integer(a), Numeric::Integer(b)) => Numeric::Integer(a / b),
+        }
+    }
+}
+
+impl std::ops::Rem for Numeric {
+    type Output = Numeric;
+    fn rem(self, rhs: Numeric) -> Numeric {
+        match (self, rhs) {
+            (Numeric::Float(a), Numeric::Float(b)) => Numeric::Float(a % b),
+            (Numeric::Float(a), Numeric::Integer(b)) => Numeric::Float(a % b as f64),
+            (Numeric::Integer(a), Numeric::Float(b)) => Numeric::Float(a as f64 % b),
+            (Numeric::Integer(a), Numeric::Integer(b)) => Numeric::Integer(a % b),
+        }
+    }
+}
+
+impl PartialEq for Numeric {
+    fn eq(&self, other: &Numeric) -> bool {
+        self.to_f64() == other.to_f64()
+    }
+}
+
+impl PartialOrd for Numeric {
+    fn partial_cmp(&self, other: &Numeric) -> Option<std::cmp::Ordering> {
+        self.to_f64().partial_cmp(&other.to_f64())
+    }
+}
+
+impl From<Numeric> for Value {
+    fn from(n: Numeric) -> Self {
+        match n {
+            Numeric::Float(f) => Value::Float(f),
+            Numeric::Integer(i) => Value::Integer(i),
+        }
+    }
+}
+
+impl TryFrom<Value> for Numeric {
+    type Error = ();
+    fn try_from(v: Value) -> Result<Self, Self::Error> {
+        match v {
+            Value::Float(f) => Ok(Numeric::Float(f)),
+            Value::Integer(i) => Ok(Numeric::Integer(i)),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +234,10 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Null, Value::Null) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Float(a), Value::Integer(b)) => *a == *b as f64,
+            (Value::Integer(a), Value::Float(b)) => *a as f64 == *b,
+            (Value::Integer(a), Value::Integer(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => Arc::ptr_eq(a, b),
             (Value::Object(a), Value::Object(b)) => Arc::ptr_eq(a, b),
@@ -141,7 +252,8 @@ impl Value {
         match self {
             Value::Null => false,
             Value::Bool(b) => *b,
-            Value::Number(n) => *n != 0.0 && !n.is_nan(),
+            Value::Float(f) => *f != 0.0 && !f.is_nan(),
+            Value::Integer(i) => *i != 0,
             Value::String(s) => !s.is_empty(),
             Value::Array(_) => true,
             Value::Function(_) => true,
@@ -169,7 +281,8 @@ impl Value {
         match self {
             Value::Null => "null",
             Value::Bool(_) => "bool",
-            Value::Number(_) => "number",
+            Value::Float(_) => "number",
+            Value::Integer(_) => "number",
             Value::String(_) => "string",
             Value::Array(_) => "array",
             Value::Object(_) => "object",
@@ -181,13 +294,14 @@ impl Value {
         match self {
             Value::Null => "null".to_string(),
             Value::Bool(b) => b.to_string(),
-            Value::Number(n) => {
-                if n.fract() == 0.0 && n.abs() < 1e15 {
-                    format!("{}", *n as i64)
+            Value::Float(f) => {
+                if f.fract() == 0.0 && f.abs() < 1e15 {
+                    format!("{}", *f as i64)
                 } else {
-                    format!("{}", n)
+                    format!("{}", f)
                 }
             }
+            Value::Integer(i) => i.to_string(),
             Value::String(s) => s.clone(),
             Value::Array(a) => {
                 let items: Vec<String> = a
