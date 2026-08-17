@@ -1879,6 +1879,126 @@ async fn test_array_sort_slice_indexof() {
 }
 
 #[tokio::test]
+async fn test_compound_assign_mod() {
+    assert_eq!(
+        test_process(
+            r"
+        let i = 17
+        i %= 5
+        return i
+    "
+        )
+        .await,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn test_compound_assign_bitwise_ops() {
+    assert_eq!(
+        test_process(
+            r"
+        let a = 12
+        a &= 10
+        return a
+    "
+        )
+        .await,
+        "8"
+    );
+    assert_eq!(
+        test_process(
+            r"
+        let b = 12
+        b |= 3
+        return b
+    "
+        )
+        .await,
+        "15"
+    );
+    assert_eq!(
+        test_process(
+            r"
+        let c = 10
+        c ^= 12
+        return c
+    "
+        )
+        .await,
+        "6"
+    );
+}
+
+#[tokio::test]
+async fn test_compound_assign_shift() {
+    assert_eq!(
+        test_process(
+            r"
+        let x = 4
+        x <<= 3
+        return x
+    "
+        )
+        .await,
+        "32"
+    );
+    assert_eq!(
+        test_process(
+            r"
+        let y = 32
+        y >>= 2
+        return y
+    "
+        )
+        .await,
+        "8"
+    );
+}
+
+#[tokio::test]
+async fn test_bitwise_binary_ops() {
+    assert_eq!(test_process(r"return 12 & 10").await, "8");
+    assert_eq!(test_process(r"return 12 | 5").await, "13");
+    assert_eq!(test_process(r"return 12 ^ 10").await, "6");
+    assert_eq!(test_process(r"return 1 << 5").await, "32");
+    assert_eq!(test_process(r"return 32 >> 3").await, "4");
+}
+
+#[tokio::test]
+async fn test_compound_assign_string_concat() {
+    assert_eq!(
+        test_process(
+            r#"
+        let x = "foo"
+        x += "bar"
+        return x
+    "#
+        )
+        .await,
+        "foobar"
+    );
+}
+
+#[tokio::test]
+async fn test_compound_assign_chained() {
+    assert_eq!(
+        test_process(
+            r"
+        let i = 1
+        i += 2
+        i *= 3
+        i -= 1
+        i %= 4
+        return i
+    "
+        )
+        .await,
+        "0"
+    );
+}
+
+#[tokio::test]
 async fn test_array_for_each() {
     assert_eq!(
         test_process(

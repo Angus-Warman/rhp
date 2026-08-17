@@ -130,6 +130,11 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     Neq,
     StrictEq,
@@ -149,6 +154,12 @@ pub enum AssignOp {
     Sub,
     Mul,
     Div,
+    Mod,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 // ---- Statements ----

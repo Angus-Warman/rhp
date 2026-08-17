@@ -98,6 +98,14 @@ pub enum Token {
     StrictEq,
     #[token("!==")]
     StrictNeq,
+    #[token("<<=")]
+    ShlAssign,
+    #[token(">>=")]
+    ShrAssign,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
     #[token("++")]
     PlusPlus,
     #[token("--")]
@@ -122,6 +130,14 @@ pub enum Token {
     MulAssign,
     #[token("/=")]
     DivAssign,
+    #[token("%=")]
+    ModAssign,
+    #[token("&=")]
+    BitAndAssign,
+    #[token("|=")]
+    BitOrAssign,
+    #[token("^=")]
+    BitXorAssign,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -138,6 +154,12 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    #[token("&")]
+    BitAnd,
+    #[token("|")]
+    BitOr,
+    #[token("^")]
+    BitXor,
     #[token("=")]
     Assign,
     #[token(".")]

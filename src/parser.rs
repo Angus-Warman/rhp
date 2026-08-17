@@ -390,6 +390,12 @@ impl<'a> Parser<'a> {
             Some(Token::MinusAssign) => Some(AssignOp::Sub),
             Some(Token::MulAssign) => Some(AssignOp::Mul),
             Some(Token::DivAssign) => Some(AssignOp::Div),
+            Some(Token::ModAssign) => Some(AssignOp::Mod),
+            Some(Token::BitAndAssign) => Some(AssignOp::BitAnd),
+            Some(Token::BitOrAssign) => Some(AssignOp::BitOr),
+            Some(Token::BitXorAssign) => Some(AssignOp::BitXor),
+            Some(Token::ShlAssign) => Some(AssignOp::Shl),
+            Some(Token::ShrAssign) => Some(AssignOp::Shr),
             _ => None,
         };
 
@@ -1035,6 +1041,11 @@ impl<'a> Parser<'a> {
             Token::Star => Some(BinOp::Mul),
             Token::Slash => Some(BinOp::Div),
             Token::Percent => Some(BinOp::Mod),
+            Token::BitAnd => Some(BinOp::BitAnd),
+            Token::BitOr => Some(BinOp::BitOr),
+            Token::BitXor => Some(BinOp::BitXor),
+            Token::Shl => Some(BinOp::Shl),
+            Token::Shr => Some(BinOp::Shr),
             Token::StrictEq => Some(BinOp::StrictEq),
             Token::StrictNeq => Some(BinOp::StrictNeq),
             Token::Eq => Some(BinOp::Eq),
@@ -1055,9 +1066,13 @@ fn infix_binding_power(op: &BinOp) -> (u8, u8) {
     match op {
         BinOp::Or => (1, 2),
         BinOp::And => (3, 4),
-        BinOp::Eq | BinOp::Neq | BinOp::StrictEq | BinOp::StrictNeq => (5, 6),
-        BinOp::Lt | BinOp::Lte | BinOp::Gt | BinOp::Gte => (7, 8),
-        BinOp::Add | BinOp::Sub => (9, 10),
-        BinOp::Mul | BinOp::Div | BinOp::Mod => (11, 12),
+        BinOp::BitOr => (5, 6),
+        BinOp::BitXor => (7, 8),
+        BinOp::BitAnd => (9, 10),
+        BinOp::Eq | BinOp::Neq | BinOp::StrictEq | BinOp::StrictNeq => (11, 12),
+        BinOp::Lt | BinOp::Lte | BinOp::Gt | BinOp::Gte => (13, 14),
+        BinOp::Shl | BinOp::Shr => (15, 16),
+        BinOp::Add | BinOp::Sub => (17, 18),
+        BinOp::Mul | BinOp::Div | BinOp::Mod => (19, 20),
     }
 }

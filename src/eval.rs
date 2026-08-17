@@ -639,6 +639,12 @@ impl Evaluator {
             BinOp::Div => numeric_op(l, r, |a, b| a / b, span),
             BinOp::Mod => numeric_op(l, r, |a, b| a % b, span),
 
+            BinOp::BitAnd => bitwise_op(&l, &r, |a, b| a & b, span),
+            BinOp::BitOr => bitwise_op(&l, &r, |a, b| a | b, span),
+            BinOp::BitXor => bitwise_op(&l, &r, |a, b| a ^ b, span),
+            BinOp::Shl => bitwise_op(&l, &r, |a, b| a << b, span),
+            BinOp::Shr => bitwise_op(&l, &r, |a, b| a >> b, span),
+
             BinOp::Eq => Ok(Value::Bool(loose_eq(&l, &r))),
             BinOp::Neq => Ok(Value::Bool(!loose_eq(&l, &r))),
             BinOp::StrictEq => Ok(Value::Bool(l == r)),
@@ -684,6 +690,13 @@ impl Evaluator {
                 (AssignOp::Mul, Value::Integer(a), Value::Integer(b)) => Value::Integer(a * b),
                 (AssignOp::Div, Value::Float(a), Value::Float(b)) => Value::Float(a / b),
                 (AssignOp::Div, Value::Integer(a), Value::Integer(b)) => Value::Integer(a / b),
+                (AssignOp::Mod, Value::Float(a), Value::Float(b)) => Value::Float(a % b),
+                (AssignOp::Mod, Value::Integer(a), Value::Integer(b)) => Value::Integer(a % b),
+                (AssignOp::BitAnd, Value::Integer(a), Value::Integer(b)) => Value::Integer(a & b),
+                (AssignOp::BitOr, Value::Integer(a), Value::Integer(b)) => Value::Integer(a | b),
+                (AssignOp::BitXor, Value::Integer(a), Value::Integer(b)) => Value::Integer(a ^ b),
+                (AssignOp::Shl, Value::Integer(a), Value::Integer(b)) => Value::Integer(a << b),
+                (AssignOp::Shr, Value::Integer(a), Value::Integer(b)) => Value::Integer(a >> b),
                 _ => {
                     return Err(Signal::Error(EvalError::new(
                         "invalid operand types for compound assignment",
@@ -953,6 +966,25 @@ fn numeric_op(
         _ => Err(Signal::Error(EvalError::new(
             format!(
                 "arithmetic requires numbers, got {} and {}",
+                l.type_name(),
+                r.type_name()
+            ),
+            span.clone(),
+        ))),
+    }
+}
+
+fn bitwise_op(
+    l: &Value,
+    r: &Value,
+    op: impl Fn(i64, i64) -> i64,
+    span: &std::ops::Range<usize>,
+) -> EvalResult {
+    match (l, r) {
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(op(*a, *b))),
+        _ => Err(Signal::Error(EvalError::new(
+            format!(
+                "bitwise operation requires integers, got {} and {}",
                 l.type_name(),
                 r.type_name()
             ),
