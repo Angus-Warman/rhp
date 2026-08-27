@@ -3,10 +3,10 @@
 - [x] `[P0]` **Script-controlled HTTP responses.** Today every `.rhp` always
       returns `200` with `Content-Type: text/html`. Add a `RES` object so
       scripts can set status, set headers, emit JSON, and redirect:
-      `RES.SetStatus(404)`, `RES.SetHeader("X-Foo","bar")`,
+      `RES.Status = 404`, `RES.Headers["X-Foo"] = "bar"`,
       `RES.Json({...})`, `RES.Redirect("/login")`. Short-circuit
       remaining sections after a redirect/return. — *Done: `RES` object
-      with SetStatus/SetHeader/SetCookie/Json/Html/Redirect; `HttpResponse`
+      with Status/Headers/SetCookie/Json/Html/Redirect; `HttpResponse`
       threaded through `process_src` → `into_axum`.*
 - [x] `[P0]` **Cookies.** Read via `REQ.Cookies.name`, set via
       `RES.SetCookie(name, value, { ... })`. Needed for real sessions. —

@@ -39,7 +39,7 @@ async fn test_response_controls_http_status_and_redirect() {
         &[
             (
                 "gone.rhp",
-                "<rhp>RES.SetStatus(410)\nRES.Json({ ok: false })</rhp>",
+                "<rhp>RES.Status = 410\nRES.Json({ ok: false })</rhp>",
             ),
             ("old.rhp", "<rhp>RES.Redirect('/new.rhp')</rhp>"),
             ("new.rhp", "<h1>moved here</h1>"),

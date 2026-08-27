@@ -283,9 +283,9 @@ impl HttpResponse {
             return response;
         };
         let lock = map.lock().expect("lock poisoned");
-        if let Some(Value::Float(n)) = lock.get("_status") {
+        if let Some(Value::Float(n)) = lock.get("Status") {
             response.status = Some(*n as u16);
-        } else if let Some(Value::Integer(n)) = lock.get("_status") {
+        } else if let Some(Value::Integer(n)) = lock.get("Status") {
             response.status = Some(*n as u16);
         }
         if let Some(Value::String(url)) = lock.get("_redirect") {
@@ -297,7 +297,7 @@ impl HttpResponse {
         if let Some(Value::String(ct)) = lock.get("_content_type") {
             response.content_type = Some(ct.clone());
         }
-        if let Some(Value::Object(headers)) = lock.get("_headers") {
+        if let Some(Value::Object(headers)) = lock.get("Headers") {
             let header_lock = headers.lock().expect("lock poisoned");
             let mut pairs: Vec<(String, String)> = header_lock
                 .iter()
@@ -748,69 +748,10 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         env_mut.define("console", console);
 
         // Define RES: script-controlled status/headers/body/redirect.
-        // Methods write into a shared map that `process_src` reads afterwards.
+        // Status is a plain property (RES.Status = 404); Headers is a nested
+        // object (RES.Headers['X'] = 'y'); methods write the rest into the
+        // shared map that `process_src` reads afterwards.
         let response_map = Arc::new(Mutex::new(HashMap::new()));
-
-        let response_set_status = {
-            let map = response_map.clone();
-            Value::Function(Function {
-                params: vec!["status".to_string()],
-                body: FunctionBody::Native(Arc::new(move |args| {
-                    let map = map.clone();
-                    Box::pin(async move {
-                        match args.first() {
-                            Some(Value::Float(n)) if *n >= 100.0 && *n <= 599.0 => {
-                                map.lock()
-                                    .expect("lock poisoned")
-                                    .insert("_status".to_string(), Value::Float(*n));
-                                Ok(Value::Null)
-                            }
-                            Some(Value::Integer(n)) if *n >= 100 && *n <= 599 => {
-                                map.lock()
-                                    .expect("lock poisoned")
-                                    .insert("_status".to_string(), Value::Integer(*n));
-                                Ok(Value::Null)
-                            }
-                            Some(other) => Ok(error_value(format!(
-                                "RES.SetStatus: expected a status code, got {}",
-                                other.type_name()
-                            ))),
-                            None => Ok(error_value("RES.SetStatus: expected a status code")),
-                        }
-                    })
-                })),
-                captured: Env::new_root(),
-            })
-        };
-
-        let response_set_header = {
-            let map = response_map.clone();
-            Value::Function(Function {
-                params: vec!["name".to_string(), "value".to_string()],
-                body: FunctionBody::Native(Arc::new(move |args| {
-                    let map = map.clone();
-                    Box::pin(async move {
-                        match (args.first(), args.get(1)) {
-                            (Some(Value::String(name)), Some(Value::String(value))) => {
-                                let mut lock = map.lock().expect("lock poisoned");
-                                let headers =
-                                    lock.entry("_headers".to_string()).or_insert_with(|| {
-                                        Value::Object(Arc::new(Mutex::new(HashMap::new())))
-                                    });
-                                if let Value::Object(h) = headers {
-                                    h.lock()
-                                        .expect("lock poisoned")
-                                        .insert(name.clone(), Value::String(value.clone()));
-                                }
-                                Ok(Value::Null)
-                            }
-                            _ => Ok(error_value("RES.SetHeader: expected (name, value) strings")),
-                        }
-                    })
-                })),
-                captured: Env::new_root(),
-            })
-        };
 
         let response_set_cookie = {
             let map = response_map.clone();
@@ -947,8 +888,8 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
                         };
                         let mut lock = map.lock().expect("lock poisoned");
                         lock.insert("_redirect".to_string(), Value::String(url));
-                        if !lock.contains_key("_status") {
-                            lock.insert("_status".to_string(), Value::Integer(302));
+                        if !lock.contains_key("Status") {
+                            lock.insert("Status".to_string(), Value::Integer(302));
                         }
                         Ok(Value::Null)
                     })
@@ -960,8 +901,10 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
         let response = Value::Object(response_map.clone());
         {
             let mut map = response_map.lock().expect("lock poisoned");
-            map.insert("SetStatus".to_string(), response_set_status);
-            map.insert("SetHeader".to_string(), response_set_header);
+            map.insert(
+                "Headers".to_string(),
+                Value::Object(Arc::new(Mutex::new(HashMap::new()))),
+            );
             map.insert("SetCookie".to_string(), response_set_cookie);
             map.insert("Json".to_string(), response_json);
             map.insert("Html".to_string(), response_html);

@@ -1473,7 +1473,7 @@ async fn test_response_object() {
     // Status + JSON body + content type.
     let (_html, response) = process_src(
         r#"<rhp>
-        RES.SetStatus(404)
+        RES.Status = 404
         RES.Json({ error: "nope" })
         return "ignored"
     </rhp>"#
@@ -1504,7 +1504,7 @@ async fn test_response_object() {
     // Custom status + redirect.
     let (_, response) = process_src(
         r#"<rhp>
-        RES.SetStatus(301)
+        RES.Status = 301
         RES.Redirect("/moved")
     </rhp>"#
             .to_string(),
@@ -1532,11 +1532,10 @@ async fn test_response_object() {
         )]
     );
 
-    // SetHeader + bad args.
+    // SetHeader.
     let (_, response) = process_src(
         r#"<rhp>
-        RES.SetHeader("X-Powered-By", "rhp")
-        let bad = RES.SetStatus("nope")
+        RES.Headers["X-Powered-By"] = "rhp"
     </rhp>"#
             .to_string(),
         ctx(Method::Get),
