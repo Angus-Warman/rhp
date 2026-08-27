@@ -1,3 +1,6 @@
+## Bugs
+- <label for> breaks parsing
+
 ## HTTP / server layer
 
 - [x] `[P0]` **Script-controlled HTTP responses.** Today every `.rhp` always
@@ -82,3 +85,4 @@
 - [ ] `[P2]` **CI** (cargo fmt / clippy / test on push).
 - [ ] `[P2]` **Error page for script runtime errors** — today a thrown error
       becomes a 500-ish blank response; render a readable traceback.
+

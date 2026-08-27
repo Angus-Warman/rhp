@@ -373,14 +373,19 @@ fn split_src(src: &str) -> Vec<Section> {
     while !rest.is_empty() {
         match rest.find("<rhp") {
             None => {
-                // No more code blocks — remainder is HTML
-                sections.push(Section::Html(rest.to_string()));
+                // Rest is HTML
+                if !rest.trim().is_empty() {
+                    sections.push(Section::Html(rest.to_string()));
+                }
                 break;
             }
             Some(start) => {
                 // Capture HTML before the tag
                 if start > 0 {
-                    sections.push(Section::Html(rest[..start].to_string()));
+                    let section =  rest[..start].to_string();
+                    if !section.trim().is_empty() {
+                        sections.push(Section::Html(section));
+                    }
                 }
 
                 let after_open = &rest[start + "<rhp".len()..];
