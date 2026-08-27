@@ -36,13 +36,13 @@ mod process;
 mod value;
 mod ws;
 
-pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, hot_reload: bool) -> Result<()> {
+pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, watch_mode: bool) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
     let conn = connect(db_conn).await?;
 
-    let tx = if hot_reload {
+    let tx = if watch_mode {
         let watch_path = folder.canonicalize().unwrap_or_else(|_| folder.clone());
-        tracing::info!("hot-reload enabled, watching {watch_path:?}");
+        tracing::info!("watching for file changes");
         let tx = broadcast::Sender::new(64);
         let watcher = start_file_watcher(&watch_path, tx.clone());
         tokio::spawn(async move {

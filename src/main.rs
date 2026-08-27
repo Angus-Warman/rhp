@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use dotenv::dotenv;
-use std::path::PathBuf;
+use std::path::{self, PathBuf};
 
 use rhp::run_server;
 
@@ -25,7 +25,7 @@ struct Args {
 
     /// Enable hot-reload: watch files and auto-reload the browser on changes
     #[arg(long, env = "HOT_RELOAD")]
-    hot_reload: bool,
+    watch: bool,
 }
 
 #[tokio::main]
@@ -45,6 +45,9 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_max_level(level).init();
 
-    run_server(port, folder, &db_conn, args.hot_reload).await?;
+    let actual_folder = path::absolute(&folder)?;
+    tracing::info!("serving {actual_folder:?}");
+
+    run_server(port, folder, &db_conn, args.watch).await?;
     Ok(())
 }
