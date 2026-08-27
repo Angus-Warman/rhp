@@ -1,0 +1,7 @@
+<rhp>
+return REQ.Headers
+</rhp>
+
+<rhp>
+return REQ.Cookies
+</rhp>

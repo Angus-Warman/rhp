@@ -1562,13 +1562,17 @@ async fn test_cookie_and_header_globals() {
     };
     let env = setup_env(&context, test_conn().await);
     assert_eq!(
-        process_script_section(env, r#"return COOKIE.session + ':' + COOKIE.theme"#).await,
+        process_script_section(
+            env,
+            r#"return REQ.Cookies.session + ':' + REQ.Cookies.theme"#
+        )
+        .await,
         "abc:dark"
     );
 
     let env = setup_env(&context, test_conn().await);
     assert_eq!(
-        process_script_section(env, r#"return HEADER["user-agent"]"#).await,
+        process_script_section(env, r#"return REQ.Headers["user-agent"]"#).await,
         "test-agent"
     );
 }

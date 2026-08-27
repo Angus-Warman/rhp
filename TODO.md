@@ -8,14 +8,10 @@
       remaining sections after a redirect/return. — *Done: `RES` object
       with SetStatus/SetHeader/SetCookie/Json/Html/Redirect; `HttpResponse`
       threaded through `process_src` → `into_axum`.*
-- [x] `[P0]` **Cookies.** Read via `COOKIE.name`, set via
+- [x] `[P0]` **Cookies.** Read via `REQ.Cookies.name`, set via
       `RES.SetCookie(name, value, { ... })`. Needed for real sessions. —
-      *Done: `COOKIE` global parsed from the request header; `SetCookie`
+      *Done: `REQ.Cookies` parsed from the request header; `SetCookie`
       supports Path/MaxAge/HttpOnly/Secure/SameSite.*
-- [x] `[P1]` **Request headers.** Expose `HEADER.User-Agent` etc. (only
-      `Content-Type` is implicitly parsed for `BODY` today). — *Done: `HEADER`
-      global (lower-cased names; use `HEADER["user-agent"]` for hyphenated
-      names).*
 - [ ] `[P1]` **Path parameters** (`/users/:id` → `PARAM.id`). `resolve_rhp`
       only matches files/dirs; add route patterns that keep mapping to `.rhp`
       files (e.g. `users/:id.rhp`).

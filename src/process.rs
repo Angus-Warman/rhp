@@ -432,16 +432,15 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
 
         env_mut.define("BODY", context.body.clone());
 
-        // Expose request headers (lower-cased names) as HEADER.<name>
+        // Expose request data as REQ.Headers.<name>
         let header_map: HashMap<String, Value> = context
             .headers
             .iter()
             .map(|(k, v)| (k.clone(), Value::String(v.clone())))
             .collect();
         let headers = Value::Object(Arc::new(Mutex::new(header_map)));
-        env_mut.define("HEADER", headers);
 
-        // Parse the `cookie` request header into COOKIE.<name>
+        // Parse the `cookie` request header into REQ.Cookies.<name>
         let cookie_map: HashMap<String, Value> = context
             .headers
             .get("cookie")
@@ -455,7 +454,13 @@ fn setup_env(context: &Context, conn: DbConn) -> Arc<Mutex<Env>> {
             })
             .unwrap_or_default();
         let cookies = Value::Object(Arc::new(Mutex::new(cookie_map)));
-        env_mut.define("COOKIE", cookies);
+
+        let req_map: HashMap<String, Value> = HashMap::from([
+            ("Headers".to_string(), headers),
+            ("Cookies".to_string(), cookies),
+        ]);
+        let req = Value::Object(Arc::new(Mutex::new(req_map)));
+        env_mut.define("REQ", req);
 
         // Define JSON.Parse / JSON.Stringify
         let json_parse = Value::Function(Function {
