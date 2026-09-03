@@ -2,7 +2,9 @@ use anyhow::{Result, anyhow};
 use rquickjs::function::{Async, Rest};
 use rquickjs::markers::ParallelSend;
 use rquickjs::prelude::{IntoJs, Opt};
-use rquickjs::{Array, AsyncContext, Ctx, Exception, Function, Object, Promise, Type, Value};
+use rquickjs::{
+    Array, AsyncContext, CaughtError, Ctx, Exception, Function, Object, Promise, Type, Value,
+};
 use std::ops::AsyncFnOnce;
 
 use crate::db::{DbConn, ExecStmt, QueryStmt, TableStmt};
@@ -13,6 +15,17 @@ fn js_err<'js>(ctx: &Ctx<'js>, message: impl AsRef<str>) -> rquickjs::Error {
     match Exception::from_message(ctx.clone(), message.as_ref()) {
         Ok(exc) => ctx.throw(exc.into_object().into()),
         Err(e) => e,
+    }
+}
+
+fn js_err_message<'js>(ctx: &Ctx<'js>, error: rquickjs::Error) -> String {
+    match CaughtError::from_error(ctx, error) {
+        CaughtError::Exception(exc) => match exc.message() {
+            Some(msg) => msg.to_string(),
+            None => "unknown script exception".to_string(),
+        },
+        CaughtError::Value(v) => format!("{v:?}"),
+        CaughtError::Error(e) => e.to_string(),
     }
 }
 
@@ -603,11 +616,13 @@ impl Engine {
 
         self.internal
             .async_with(async |ctx| {
-                let promise: Promise = ctx.eval(script.as_str())?;
+                let promise: Promise = ctx
+                    .eval(script.as_str())
+                    .map_err(|e| anyhow!("{}", js_err_message(&ctx, e)))?;
                 let result: Value<'_> = promise
                     .into_future()
                     .await
-                    .map_err(|e| anyhow!("script error: {e}"))?;
+                    .map_err(|e| anyhow!("{}", js_err_message(&ctx, e)))?;
                 let completion = js_to_json(&ctx, &result)?;
                 let out: Array = ctx.globals().get("__rhp_out")?;
                 let mut text = String::new();

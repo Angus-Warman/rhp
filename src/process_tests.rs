@@ -16,7 +16,7 @@ async fn test_syntax_error_inlines_in_html() {
     let src = "<rhp>function(</rhp>".to_string();
     let (output, response) = process_src(src, test_context(), conn).await;
     assert!(
-        output.contains("<pre>script error:"),
+        output.contains("<pre>script error: function name expected"),
         "expected inline error, got: {output}"
     );
     assert!(output.contains("</pre>"), "missing closing pre tag");
@@ -29,7 +29,7 @@ async fn test_runtime_throw_inlines_in_html() {
     let src = "<rhp>throw new Error('boom')</rhp>".to_string();
     let (output, response) = process_src(src, test_context(), conn).await;
     assert!(
-        output.contains("<pre>script error:"),
+        output.contains("<pre>script error: boom"),
         "expected inline error, got: {output}"
     );
     assert_eq!(response.status, None);
