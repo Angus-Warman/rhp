@@ -52,12 +52,16 @@ async fn assert_no_message(ws: &mut axum_test::TestWebSocket) {
     assert!(result.is_err(), "expected no message, but got one");
 }
 
+// OnMessage/OnClose handlers are stored as JS globals in the engine's runtime
+// (see `ON_MESSAGE_SLOT`/`ON_CLOSE_SLOT` in ws.rs), so they can never outlive
+// the runtime that created them. No Persistent handles cross into Rust state,
+// which means task cancellation at any point frees everything cleanly.
 #[tokio::test]
 async fn test_ws_chat_relay_no_self_echo() {
     let server = ws_server(
         r#"<rhp method="SOCKET">
 SOCKET.Client().OnMessage(msg => SOCKET.Peers().Send(msg))
-return "ready"
+SOCKET.Client().Send("ready")
 </rhp>"#,
     )
     .await;
@@ -76,7 +80,7 @@ async fn test_ws_everyone_echo_includes_self() {
     let server = ws_server(
         r#"<rhp method="SOCKET">
 SOCKET.Client().OnMessage(msg => SOCKET.Everyone().Send(msg))
-return "ready"
+SOCKET.Client().Send("ready")
 </rhp>"#,
     )
     .await;
@@ -96,7 +100,7 @@ async fn test_ws_rooms_are_isolated() {
         r#"<rhp method="SOCKET">
 SOCKET.Join(QUERY.room)
 SOCKET.Client().OnMessage(msg => SOCKET.Peers().Send(msg))
-return "ready"
+SOCKET.Client().Send("ready")
 </rhp>"#,
     )
     .await;
@@ -112,10 +116,10 @@ return "ready"
 }
 
 #[tokio::test]
-async fn test_ws_first_message_from_return() {
+async fn test_ws_first_message_from_explicit_send() {
     let server = ws_server(
         r#"<rhp method="SOCKET">
-return "welcome " + QUERY.name
+SOCKET.Client().Send("welcome " + QUERY.name)
 </rhp>"#,
     )
     .await;
@@ -128,7 +132,7 @@ return "welcome " + QUERY.name
 async fn test_ws_first_message_json_object() {
     let server = ws_server(
         r#"<rhp method="SOCKET">
-return { event: "welcome", id: SOCKET.Client().Id() }
+SOCKET.Client().Send({ event: "welcome", id: SOCKET.Client().Id() })
 </rhp>"#,
     )
     .await;
@@ -150,7 +154,7 @@ SOCKET.Client().OnMessage(msg => {
     SOCKET.Peers().Get(QUERY.target).Send(msg)
   }
 })
-return SOCKET.Client().Id()
+SOCKET.Client().Send(SOCKET.Client().Id())
 </rhp>"#,
     )
     .await;
@@ -174,7 +178,7 @@ async fn test_ws_on_close_broadcasts() {
         r#"<rhp method="SOCKET">
 SOCKET.Join("alpha")
 SOCKET.Client().OnClose(() => SOCKET.Everyone().Send("left"))
-return "ready"
+SOCKET.Client().Send("ready")
 </rhp>"#,
     )
     .await;
@@ -191,7 +195,7 @@ return "ready"
 async fn test_ws_get_request_skips_socket_sections() {
     let server = ws_server(
         r#"<rhp method="SOCKET">
-return "never sent"
+SOCKET.Client().Send("never sent")
 </rhp>"#,
     )
     .await;

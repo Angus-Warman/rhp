@@ -235,27 +235,34 @@
 </html>
 
 <rhp method="GET">
-    try DB.Exec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, createdAt INTEGER, room TEXT, body TEXT)").Run()
+    try {
+        const exec = await DB.Exec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, createdAt INTEGER, room TEXT, body TEXT)");
+        await exec.Run();
+    } catch(e) {}
 </rhp>
 
 <rhp method="SOCKET">
-    let room = QUERY.room || "general"
-    SOCKET.Join(room)
+    let room = QUERY.room || "general";
+    SOCKET.Join(room);
 
-    let history = DB.Query("SELECT * FROM (SELECT * FROM messages WHERE room = ? ORDER BY id DESC LIMIT 10) ORDER BY id ASC").Bind(room).All()
+    const stmt = await DB.Query("SELECT * FROM (SELECT * FROM messages WHERE room = ? ORDER BY id DESC LIMIT 10) ORDER BY id ASC");
+    const bound = await stmt.Bind(room);
+    const history = await bound.All();
 
-    let historyHtml = ""
-    for (row in history) {
-        let m = JSON.Parse(row.body)
-        historyHtml = historyHtml + <div class="message"><span class="sender">{m.name}</span><span class="text">{m.text}</span></div>
+    let historyHtml = "";
+    for (const row of history) {
+        const m = JSON.parse(row.body);
+        historyHtml += `<div class="message"><span class="sender">${m.name}</span><span class="text">${m.text}</span></div>`;
     }
 
-    SOCKET.Client().OnMessage(raw => {
-        try let m = JSON.Parse(raw)
-        DB.Table("messages").Insert({ room: room, body: raw }).Run()
-        let html = <div class="message"><span class="sender">{m.name}</span><span class="text">{m.text}</span></div>
-        SOCKET.Everyone().Send({ html: html, from: SOCKET.Client().Id() })
-    })
-    SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ html: <div class="message system"><span class="text">A user left the room</span></div> }))
-    return { event: "welcome", id: SOCKET.Client().Id(), room: room, historyHtml: historyHtml }
+    SOCKET.Client().OnMessage(async raw => {
+        try {
+            const m = JSON.parse(raw);
+            await (await (await DB.Table("messages")).Insert({ room: room, body: raw })).Run();
+            const html = `<div class="message"><span class="sender">${m.name}</span><span class="text">${m.text}</span></div>`;
+            SOCKET.Everyone().Send({ html: html, from: SOCKET.Client().Id() });
+} catch(e) {}
+    });
+    SOCKET.Client().OnClose(() => SOCKET.Everyone().Send({ html: '<div class="message system"><span class="text">A user left the room</span></div>' }));
+    SOCKET.Client().Send({ event: "welcome", id: SOCKET.Client().Id(), room: room, historyHtml: historyHtml });
 </rhp>

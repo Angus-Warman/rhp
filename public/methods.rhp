@@ -1,6 +1,6 @@
 <rhp method="PUT">
-return "this is a put request"
+writeRaw("this is a put request")
 </rhp>
 <rhp method="POST">
-return "this is a post request"
+writeRaw("this is a post request")
 </rhp>

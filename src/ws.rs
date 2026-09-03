@@ -5,15 +5,27 @@ use std::sync::{Arc, Mutex};
 use axum::extract::Query;
 use axum::extract::ws::{Message, WebSocket};
 use axum::http::Uri;
+use rquickjs::function::Rest;
+use rquickjs::prelude::{FromJs, IntoJs};
+use rquickjs::promise::MaybePromise;
+use rquickjs::{Array, Ctx, Function, Object, Value};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::db::DbConn;
-use crate::eval::call_value;
-use crate::process::{Context, Method, process_socket_src};
-use crate::value::{Env, Function, FunctionBody, Value};
+use crate::process::{Context, Method, split_src};
+use crate::quickjs::Engine;
 
 const CHANNEL_CAPACITY: usize = 256;
+
+/// Globals in the engine's runtime that hold the per-connection callbacks.
+///
+/// Handlers are stored *in JS* (as globals on the engine's own context) instead
+/// of as `Persistent` handles in Rust state. The Runtime alone owns and frees
+/// them, so no JS value can outlive the engine that created it, dropping the
+/// `Engine` at any point (including task cancellation) frees everything cleanly.
+const ON_MESSAGE_SLOT: &str = "__rhp_on_message";
+const ON_CLOSE_SLOT: &str = "__rhp_on_close";
 
 // ---- Registry ----
 
@@ -26,8 +38,6 @@ pub struct SocketRegistry {
 struct ClientInner {
     group: String,
     closing: bool,
-    on_message: Option<Value>,
-    on_close: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -130,354 +140,200 @@ impl PartialEq for SocketRef {
     }
 }
 
-// ---- Script-facing values ----
+// ---- Script-facing SOCKET globals ----
 
-pub fn socket_value(socket: &SocketRef) -> Value {
+/// Register the `SOCKET` global into a script engine's context.
+pub fn register_socket<'js>(ctx: &Ctx<'js>, socket: &SocketRef) -> rquickjs::Result<()> {
     let registry = socket.registry.clone();
     let uuid = socket.uuid;
 
-    let client = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |_args| {
-                let registry = registry.clone();
-                Box::pin(async move { Ok(group_value(registry, uuid, Selection::This)) })
-            }
-        })),
-        captured: Env::new_root(),
-    });
+    let r1 = registry.clone();
+    let client = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        group_object(&ctx, &r1, uuid, Selection::This).map(Value::from)
+    })?;
+    let r2 = registry.clone();
+    let peers = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        group_object(&ctx, &r2, uuid, Selection::Peers).map(Value::from)
+    })?;
+    let r3 = registry.clone();
+    let everyone = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        group_object(&ctx, &r3, uuid, Selection::Everyone).map(Value::from)
+    })?;
+    let r4 = registry.clone();
+    let group = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
+        group_object(&ctx, &r4, uuid, Selection::Group(name)).map(Value::from)
+    })?;
+    let r5 = registry.clone();
+    let join = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
+        if let Some(state) = r5.get(uuid) {
+            state
+                .lock()
+                .expect("lock poisoned")
+                .inner
+                .lock()
+                .expect("lock poisoned")
+                .group = name;
+        }
+        Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+    })?;
+    let r6 = registry.clone();
+    let socket_obj = Object::new(ctx.clone())?;
+    socket_obj.set("Client", client)?;
+    socket_obj.set("Peers", peers)?;
+    socket_obj.set("Everyone", everyone)?;
+    socket_obj.set("Group", group)?;
+    socket_obj.set("Join", join)?;
 
-    let peers = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |_args| {
-                let registry = registry.clone();
-                Box::pin(async move { Ok(group_value(registry, uuid, Selection::Peers)) })
-            }
-        })),
-        captured: Env::new_root(),
-    });
+    merge_client_object(ctx, &socket_obj, &r6, uuid, Selection::This, true)?;
 
-    let everyone = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |_args| {
-                let registry = registry.clone();
-                Box::pin(async move { Ok(group_value(registry, uuid, Selection::Everyone)) })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let group = Value::Function(Function {
-        params: vec!["name".to_string()],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |args| {
-                let registry = registry.clone();
-                Box::pin(async move {
-                    let name = match args.first() {
-                        Some(Value::String(s)) => s.clone(),
-                        _ => {
-                            return Ok(Value::String(
-                                "SOCKET.Group: expected a string bucket name".to_string(),
-                            ));
-                        }
-                    };
-                    Ok(group_value(registry, uuid, Selection::Group(name)))
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let join = Value::Function(Function {
-        params: vec!["name".to_string()],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |args| {
-                let registry = registry.clone();
-                Box::pin(async move {
-                    let name = match args.first() {
-                        Some(Value::String(s)) => s.clone(),
-                        _ => {
-                            return Ok(Value::String(
-                                "SOCKET.Join: expected a string bucket name".to_string(),
-                            ));
-                        }
-                    };
-                    if let Some(state) = registry.get(uuid) {
-                        state
-                            .lock()
-                            .expect("lock poisoned")
-                            .inner
-                            .lock()
-                            .expect("lock poisoned")
-                            .group = name;
-                    }
-                    Ok(Value::Null)
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let mut map = HashMap::new();
-    map.insert("Client".to_string(), client);
-    map.insert("Peers".to_string(), peers);
-    map.insert("Everyone".to_string(), everyone);
-    map.insert("Group".to_string(), group);
-    map.insert("Join".to_string(), join);
-    Value::Object(Arc::new(Mutex::new(map)))
+    ctx.globals().set("SOCKET", socket_obj)?;
+    Ok(())
 }
 
-fn group_value(registry: Arc<SocketRegistry>, uuid: Uuid, selection: Selection) -> Value {
+fn group_object<'js>(
+    ctx: &Ctx<'js>,
+    registry: &Arc<SocketRegistry>,
+    uuid: Uuid,
+    selection: Selection,
+) -> rquickjs::Result<Object<'js>> {
     let is_this = selection == Selection::This;
-    let mut map = HashMap::new();
-
-    let send = Value::Function(Function {
-        params: vec!["value".to_string()],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            let selection = selection.clone();
-            move |args| {
-                let registry = registry.clone();
-                let selection = selection.clone();
-                Box::pin(async move {
-                    let text = match args.first().and_then(value_to_text) {
-                        Some(t) => t,
-                        None => return Ok(Value::Null),
-                    };
-                    for member in registry.members(&selection, uuid) {
-                        if let Some(state) = registry.get(member) {
-                            let _ = state
-                                .lock()
-                                .expect("lock poisoned")
-                                .tx
-                                .try_send(Message::Text(text.clone().into()));
-                        }
-                    }
-                    Ok(Value::Null)
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let count = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            let selection = selection.clone();
-            move |_args| {
-                let registry = registry.clone();
-                let selection = selection.clone();
-                Box::pin(async move {
-                    Ok(Value::Integer(
-                        registry.members(&selection, uuid).len() as i64
-                    ))
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let ids = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            let selection = selection.clone();
-            move |_args| {
-                let registry = registry.clone();
-                let selection = selection.clone();
-                Box::pin(async move {
-                    let values = registry
-                        .members(&selection, uuid)
-                        .into_iter()
-                        .map(|id| Value::String(id.to_string()))
-                        .collect();
-                    Ok(Value::Array(Arc::new(Mutex::new(values))))
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    let get = Value::Function(Function {
-        params: vec!["id".to_string()],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            let selection = selection.clone();
-            move |args| {
-                let registry = registry.clone();
-                let selection = selection.clone();
-                Box::pin(async move {
-                    let id = match args.first() {
-                        Some(Value::String(s)) => match Uuid::parse_str(s) {
-                            Ok(id) => id,
-                            Err(_) => return Ok(Value::Null),
-                        },
-                        _ => return Ok(Value::Null),
-                    };
-                    if registry.members(&selection, uuid).contains(&id) {
-                        Ok(client_value(registry, id))
-                    } else {
-                        Ok(Value::Null)
-                    }
-                })
-            }
-        })),
-        captured: Env::new_root(),
-    });
-
-    map.insert("Send".to_string(), send);
-    map.insert("Count".to_string(), count);
-    map.insert("Get".to_string(), get);
-    map.insert("Ids".to_string(), ids);
-
-    if is_this {
-        let id = Value::Function(Function {
-            params: vec![],
-            body: FunctionBody::Native(Arc::new(move |_args| {
-                Box::pin(async move { Ok(Value::String(uuid.to_string())) })
-            })),
-            captured: Env::new_root(),
-        });
-
-        let on_message = Value::Function(Function {
-            params: vec!["callback".to_string()],
-            body: FunctionBody::Native(Arc::new({
-                let registry = registry.clone();
-                move |args| {
-                    let registry = registry.clone();
-                    Box::pin(async move {
-                        match args.first() {
-                            Some(Value::Function(_)) => {}
-                            Some(other) => {
-                                return Ok(Value::String(format!(
-                                    "SOCKET.OnMessage: expected a function, got {}",
-                                    other.type_name()
-                                )));
-                            }
-                            None => {
-                                return Ok(Value::String(
-                                    "SOCKET.OnMessage: expected a function".to_string(),
-                                ));
-                            }
-                        }
-                        if let Some(state) = registry.get(uuid) {
-                            state
-                                .lock()
-                                .expect("lock poisoned")
-                                .inner
-                                .lock()
-                                .expect("lock poisoned")
-                                .on_message = args.first().cloned();
-                        }
-                        Ok(Value::Null)
-                    })
-                }
-            })),
-            captured: Env::new_root(),
-        });
-
-        let on_close = Value::Function(Function {
-            params: vec!["callback".to_string()],
-            body: FunctionBody::Native(Arc::new({
-                let registry = registry.clone();
-                move |args| {
-                    let registry = registry.clone();
-                    Box::pin(async move {
-                        match args.first() {
-                            Some(Value::Function(_)) => {}
-                            Some(other) => {
-                                return Ok(Value::String(format!(
-                                    "SOCKET.OnClose: expected a function, got {}",
-                                    other.type_name()
-                                )));
-                            }
-                            None => {
-                                return Ok(Value::String(
-                                    "SOCKET.OnClose: expected a function".to_string(),
-                                ));
-                            }
-                        }
-                        if let Some(state) = registry.get(uuid) {
-                            state
-                                .lock()
-                                .expect("lock poisoned")
-                                .inner
-                                .lock()
-                                .expect("lock poisoned")
-                                .on_close = args.first().cloned();
-                        }
-                        Ok(Value::Null)
-                    })
-                }
-            })),
-            captured: Env::new_root(),
-        });
-
-        map.insert("Id".to_string(), id);
-        map.insert("OnMessage".to_string(), on_message);
-        map.insert("OnClose".to_string(), on_close);
-    }
-
-    Value::Object(Arc::new(Mutex::new(map)))
+    let obj = Object::new(ctx.clone())?;
+    merge_client_object(ctx, &obj, registry, uuid, selection, is_this)?;
+    Ok(obj)
 }
 
-fn client_value(registry: Arc<SocketRegistry>, target: Uuid) -> Value {
-    let send = Value::Function(Function {
-        params: vec!["value".to_string()],
-        body: FunctionBody::Native(Arc::new({
-            let registry = registry.clone();
-            move |args| {
-                let registry = registry.clone();
-                Box::pin(async move {
-                    let text = match args.first().and_then(value_to_text) {
-                        Some(t) => t,
-                        None => return Ok(Value::Null),
-                    };
-                    if let Some(state) = registry.get(target) {
+/// Populate a client-group object with Send/Count/Get/Ids (plus Id/OnMessage/
+/// OnClose for the group containing the current client).
+fn merge_client_object<'js>(
+    ctx: &Ctx<'js>,
+    obj: &Object<'js>,
+    registry: &Arc<SocketRegistry>,
+    uuid: Uuid,
+    selection: Selection,
+    is_this: bool,
+) -> rquickjs::Result<()> {
+    let reg0 = registry.clone();
+    let sel = selection.clone();
+    let send = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, values: Rest<Value<'js>>| {
+            if let Some(text) = values.first() {
+                let text = stringify_value(&ctx, text)?;
+                for member in reg0.members(&sel, uuid) {
+                    if let Some(state) = reg0.get(member) {
                         let _ = state
                             .lock()
                             .expect("lock poisoned")
                             .tx
-                            .try_send(Message::Text(text.into()));
+                            .try_send(Message::Text(text.clone().into()));
                     }
-                    Ok(Value::Null)
-                })
+                }
             }
-        })),
-        captured: Env::new_root(),
-    });
+            Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+        },
+    )?;
+    obj.set("Send", send)?;
 
-    let id = Value::Function(Function {
-        params: vec![],
-        body: FunctionBody::Native(Arc::new(move |_args| {
-            Box::pin(async move { Ok(Value::String(target.to_string())) })
-        })),
-        captured: Env::new_root(),
-    });
+    let reg1 = registry.clone();
+    let sel = selection.clone();
+    let count = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        let n = reg1.members(&sel, uuid).len() as f64;
+        n.into_js(&ctx)
+    })?;
+    obj.set("Count", count)?;
 
-    let mut map = HashMap::new();
-    map.insert("Send".to_string(), send);
-    map.insert("Id".to_string(), id);
-    Value::Object(Arc::new(Mutex::new(map)))
+    let reg2 = registry.clone();
+    let sel = selection.clone();
+    let ids = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        let arr = Array::new(ctx.clone())?;
+        for id in reg2.members(&sel, uuid) {
+            let idx = arr.len();
+            arr.set(idx, id.to_string().into_js(&ctx)?)?;
+        }
+        Ok::<rquickjs::Value, rquickjs::Error>(Value::from(arr))
+    })?;
+    obj.set("Ids", ids)?;
+
+    let reg3 = registry.clone();
+    let sel = selection.clone();
+    let get = Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: String| {
+        let target = match Uuid::parse_str(&id) {
+            Ok(t) => t,
+            Err(_) => return Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone())),
+        };
+        if reg3.members(&sel, uuid).contains(&target) {
+            client_object(&ctx, &reg3, target).map(Value::from)
+        } else {
+            Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+        }
+    })?;
+    obj.set("Get", get)?;
+
+    if is_this {
+        let id = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            uuid.to_string().into_js(&ctx)
+        })?;
+        obj.set("Id", id)?;
+
+        let on_message = Function::new(ctx.clone(), move |ctx: Ctx<'js>, cb: Value<'js>| {
+            ctx.globals().set(ON_MESSAGE_SLOT, cb)?;
+            Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+        })?;
+        obj.set("OnMessage", on_message)?;
+
+        let on_close = Function::new(ctx.clone(), move |ctx: Ctx<'js>, cb: Value<'js>| {
+            ctx.globals().set(ON_CLOSE_SLOT, cb)?;
+            Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+        })?;
+        obj.set("OnClose", on_close)?;
+    }
+
+    Ok(())
 }
 
-fn value_to_text(v: &Value) -> Option<String> {
-    match v {
-        Value::Null => None,
-        Value::String(s) => Some(s.clone()),
-        Value::Object(_) | Value::Array(_) => {
-            serde_json::to_string(&crate::process::value_to_json(v)).ok()
-        }
-        other => Some(other.display()),
+fn client_object<'js>(
+    ctx: &Ctx<'js>,
+    registry: &Arc<SocketRegistry>,
+    target: Uuid,
+) -> rquickjs::Result<Object<'js>> {
+    let registry = registry.clone();
+    let obj = Object::new(ctx.clone())?;
+    let send = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, values: Rest<Value<'js>>| {
+            if let Some(text) = values.first() {
+                let text = stringify_value(&ctx, text)?;
+                if let Some(state) = registry.get(target) {
+                    let _ = state
+                        .lock()
+                        .expect("lock poisoned")
+                        .tx
+                        .try_send(Message::Text(text.into()));
+                }
+            }
+            Ok::<rquickjs::Value, rquickjs::Error>(Value::new_null(ctx.clone()))
+        },
+    )?;
+    obj.set("Send", send)?;
+    let id = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        target.to_string().into_js(&ctx)
+    })?;
+    obj.set("Id", id)?;
+    Ok(obj)
+}
+
+/// Produce a string form of any JS value to send to clients: strings verbatim,
+/// objects/arrays as JSON, and other scalars via `String()` semantics.
+fn stringify_value<'js>(ctx: &Ctx<'js>, v: &Value<'js>) -> rquickjs::Result<String> {
+    if v.is_object() || v.is_array() {
+        let json: Object = ctx.globals().get("JSON")?;
+        let stringify: Function = json.get("stringify")?;
+        let s: String = stringify.call((v.clone(),))?;
+        return Ok(s);
     }
+    let f: Function = ctx.globals().get("String")?;
+    let s: String = f.call((v.clone(),))?;
+    Ok(s)
 }
 
 // ---- Connection lifecycle ----
@@ -506,8 +362,6 @@ pub async fn run_socket(
         inner: Mutex::new(ClientInner {
             group: String::new(),
             closing: false,
-            on_message: None,
-            on_close: None,
         }),
         tx,
     }));
@@ -520,7 +374,8 @@ pub async fn run_socket(
         method: Method::Socket,
         query,
         headers: HashMap::new(),
-        body: Value::Object(Arc::new(Mutex::new(HashMap::new()))),
+        cookies: HashMap::new(),
+        body: serde_json::Value::Object(serde_json::Map::new()),
         socket: Some(SocketRef {
             registry: registry.clone(),
             uuid,
@@ -528,27 +383,35 @@ pub async fn run_socket(
         }),
     };
 
-    let first = process_socket_src(src, context, conn).await;
-    if let Some(text) = first.as_ref().and_then(value_to_text)
-        && socket.send(Message::Text(text.into())).await.is_err()
-    {
-        teardown(&registry, &state, uuid).await;
+    let engine = match Engine::new(conn).await {
+        Ok(e) => e,
+        Err(_) => {
+            teardown(&registry, &state, uuid, None).await;
+            return;
+        }
+    };
+    if engine.setup(&context).await.is_err() {
+        teardown(&registry, &state, uuid, Some(&engine)).await;
         return;
     }
+
+    run_socket_sections(&engine, &src, &context).await;
 
     loop {
         tokio::select! {
             maybe = socket.recv() => {
                 match maybe {
                     Some(Ok(Message::Text(text))) => {
-                        fire_on_message(&state, vec![Value::String(text.to_string())]).await;
+                        fire_on_message(&engine, text.to_string()).await;
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         let text = String::from_utf8_lossy(&bytes).to_string();
-                        fire_on_message(&state, vec![Value::String(text)]).await;
+                        fire_on_message(&engine, text).await;
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                        break;
+                    }
                 }
             }
             msg = rx.recv() => {
@@ -564,33 +427,80 @@ pub async fn run_socket(
         }
     }
 
-    teardown(&registry, &state, uuid).await;
+    teardown(&registry, &state, uuid, Some(&engine)).await;
 }
 
-async fn fire_on_message(state: &Arc<Mutex<ClientState>>, args: Vec<Value>) {
-    let callback = {
-        let state_guard = state.lock().expect("lock poisoned");
-        state_guard
-            .inner
-            .lock()
-            .expect("lock poisoned")
-            .on_message
-            .clone()
-    };
-    if let Some(callback) = callback {
-        let _ = call_value(callback, args).await;
+/// Run all `SOCKET` sections for their side effects (registering OnMessage /
+/// OnClose handlers, joining groups, etc.). Scripts that want to send an
+/// initial message to the client should call `SOCKET.Client().Send(...)` explicitly.
+async fn run_socket_sections(engine: &Engine, src: &str, context: &Context) {
+    for section in split_src(src) {
+        if let crate::process::Section::Code { code, method } = section
+            && method.matches(&context.method)
+        {
+            let _ = engine.run_socket_section(&code).await;
+        }
     }
 }
 
-async fn teardown(registry: &Arc<SocketRegistry>, state: &Arc<Mutex<ClientState>>, uuid: Uuid) {
-    let callback = {
-        let state_guard = state.lock().expect("lock poisoned");
-        let mut inner = state_guard.inner.lock().expect("lock poisoned");
-        inner.closing = true;
-        inner.on_close.take()
-    };
-    if let Some(callback) = callback {
-        let _ = call_value(callback, vec![]).await;
+/// Invoke the registered `OnMessage` handler for this connection.
+///
+/// The handler lives in the engine's runtime (the `__rhp_on_message` global),
+/// so it is looked up and called in a `call_async` block. The handler may be
+/// async; any returned Promise is awaited.
+async fn fire_on_message(engine: &Engine, text: String) {
+    let _ = engine
+        .call_async(async |ctx| -> rquickjs::Result<()> {
+            let cb: Value = ctx.globals().get(ON_MESSAGE_SLOT)?;
+            if !cb.is_function() {
+                return Ok(());
+            }
+            let cb = Function::from_js(&ctx, cb)?;
+            let mut args = rquickjs::function::Args::new(ctx.clone(), 1);
+            args.push_arg(text.into_js(&ctx)?)?;
+            let result: Value = cb.call_arg(args)?;
+            let _ = MaybePromise::from_value(result).into_future::<()>().await;
+            Ok(())
+        })
+        .await;
+}
+
+/// Invoke the registered `OnClose` handler for this connection.
+async fn fire_on_close(engine: &Engine) {
+    let _ = engine
+        .call_async(async |ctx| -> rquickjs::Result<()> {
+            let cb: Value = ctx.globals().get(ON_CLOSE_SLOT)?;
+            if !cb.is_function() {
+                return Ok(());
+            }
+            let cb = Function::from_js(&ctx, cb)?;
+            let args = rquickjs::function::Args::new(ctx.clone(), 0);
+            let result: Value = cb.call_arg(args)?;
+            let _ = MaybePromise::from_value(result).into_future::<()>().await;
+            Ok(())
+        })
+        .await;
+}
+
+/// Close out a connection: mark it leaving (so it stops receiving broadcasts),
+/// fire its `OnClose` handler inside its own runtime, then deregister it.
+async fn teardown(
+    registry: &Arc<SocketRegistry>,
+    state: &Arc<Mutex<ClientState>>,
+    uuid: Uuid,
+    engine: Option<&Engine>,
+) {
+    state
+        .lock()
+        .expect("lock poisoned")
+        .inner
+        .lock()
+        .expect("lock poisoned")
+        .closing = true;
+
+    if let Some(engine) = engine {
+        fire_on_close(engine).await;
     }
+
     registry.remove(uuid);
 }

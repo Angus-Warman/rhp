@@ -1,20 +1,31 @@
 <rhp method="GET">
-try DB.Exec("CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY, name TEXT)").Run()
-
-if (QUERY) {
-  return DB.Table("widgets").Where({ id: QUERY.id }).All()
+const exec = await DB.Exec("CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY, name TEXT)");
+await exec.Run();
+const table = await DB.Table("widgets");
+if (QUERY.id) {
+    const where = await table.Where({ id: QUERY.id });
+    writeRaw(JSON.stringify(await where.All()));
+} else {
+    writeRaw(JSON.stringify(await table.All()));
 }
-return DB.Table("widgets").All()
 </rhp>
 
 <rhp method="POST">
-return DB.Table("widgets").Insert(BODY).Run()
+const table = await DB.Table("widgets");
+const insertExec = await table.Insert(BODY);
+writeRaw(JSON.stringify(await insertExec.Run()));
 </rhp>
 
 <rhp method="PUT">
-return DB.Table("widgets").Where({ id: QUERY.id }).Update(BODY).Run()
+const table = await DB.Table("widgets");
+const where = await table.Where({ id: QUERY.id });
+const updateExec = await where.Update(BODY);
+writeRaw(JSON.stringify(await updateExec.Run()));
 </rhp>
 
 <rhp method="DELETE">
-return DB.Table("widgets").Where({ id: QUERY.id }).Delete().Run()
+const table = await DB.Table("widgets");
+const where = await table.Where({ id: QUERY.id });
+const deleteExec = await where.Delete();
+writeRaw(JSON.stringify(await deleteExec.Run()));
 </rhp>

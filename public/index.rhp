@@ -11,16 +11,19 @@
     <p>
         This page has been visited
         <strong><rhp method="GET">
-            try DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)").Run()
-
-            if (DB.Table("visits").Count() == 0) {
-                DB.Table("visits").Insert({ value: 1 }).Run()
-                return 1
+            const exec = await DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)");
+            await exec.Run();
+            const table = await DB.Table("visits");
+            const count = await table.Count();
+            if (count === 0) {
+                await (await table.Insert({ value: 1 })).Run();
+                write(1);
+            } else {
+                const row = await table.One();
+                const visits = row.value + 1;
+                await (await table.Update({ value: visits })).Run();
+                write(visits);
             }
-            let visits = DB.Table("visits").One().value
-            visits++
-            DB.Table("visits").Update({ value: visits }).Run()
-            return visits
         </rhp></strong>
         times.
     </p>

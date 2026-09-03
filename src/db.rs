@@ -58,11 +58,6 @@ impl BindValue {
 }
 
 impl DbConn {
-    pub async fn ping(&self) -> Result<String> {
-        sqlx::query("SELECT 1").execute(&self.pool).await?;
-        Ok("pong".to_string())
-    }
-
     /// Lazily prepare a statement that returns rows. No I/O happens until
     /// [`QueryStmt::all`] or [`QueryStmt::one`] is called.
     pub fn query(&self, sql: &str) -> QueryStmt {

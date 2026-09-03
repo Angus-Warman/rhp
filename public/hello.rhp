@@ -1,4 +1,4 @@
 Hello
 <rhp>
-return "World"
+writeRaw("World")
 </rhp>

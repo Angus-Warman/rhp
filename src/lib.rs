@@ -27,13 +27,9 @@ use crate::{
     ws::{SocketRegistry, run_socket},
 };
 
-mod ast;
 mod db;
-mod eval;
-mod lexer;
-mod parser;
 mod process;
-mod value;
+mod quickjs;
 mod ws;
 
 pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, watch_mode: bool) -> Result<()> {
@@ -255,6 +251,10 @@ fn start_file_watcher(folder: &Path, tx: broadcast::Sender<String>) -> Recommend
 #[cfg(test)]
 #[path = "./lib_tests.rs"]
 mod lib_tests;
+
+#[cfg(test)]
+#[path = "./quickjs_tests.rs"]
+mod quickjs_tests;
 
 #[cfg(test)]
 #[path = "./ws_tests.rs"]

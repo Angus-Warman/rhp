@@ -12,8 +12,6 @@ async fn test_server() -> TestServer {
 }
 
 async fn unique_conn() -> DbConn {
-    // Use a unique named shared in-memory database per test to keep every
-    // pooled connection on the same db.
     let id = DB_ID.fetch_add(1, Ordering::Relaxed);
     connect(&format!(
         "sqlite://file%3Arhp_lib_test_{id}?mode=memory&cache=shared"
@@ -186,7 +184,7 @@ async fn test_body_global_text() {
     let server = test_server().await;
     let response = server.post("/body.rhp").text("hello world").await;
     response.assert_status_ok();
-    response.assert_text(r#"{ text: "hello world" }"#);
+    response.assert_text(r#"{"text":"hello world"}"#);
 }
 
 #[tokio::test]
@@ -197,7 +195,7 @@ async fn test_body_global_json() {
         .json(&serde_json::json!({"name": "rhp"}))
         .await;
     response.assert_status_ok();
-    response.assert_text(r#"{ name: "rhp" }"#);
+    response.assert_text(r#"{"name":"rhp"}"#);
 }
 
 #[tokio::test]
@@ -208,7 +206,7 @@ async fn test_body_global_form() {
         .form(&[("color", "red"), ("color", "blue")])
         .await;
     response.assert_status_ok();
-    response.assert_text(r#"{ color: "red", colors: ["red", "blue"] }"#);
+    response.assert_text(r#"{"color":"red","colors":["red","blue"]}"#);
 }
 
 #[tokio::test]
@@ -235,10 +233,8 @@ async fn test_crud_workflow() {
     let conn = unique_conn().await;
     let server = TestServer::new(build_router("./public".into(), conn, None));
 
-    // GET: no widgets yet
     assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
 
-    // POST: create a widget
     assert_eq!(
         server
             .post("/crud.rhp")
@@ -246,16 +242,14 @@ async fn test_crud_workflow() {
             .await
             .text()
             .trim(),
-        "{ ok: true, rowsAffected: 1 }"
+        r#"{"ok":true,"rowsAffected":1}"#
     );
 
-    // GET: now lists it
     assert_eq!(
         server.get("/crud.rhp").await.text().trim(),
-        r#"[{ id: 1, name: "widget a" }]"#
+        r#"[{"id":1,"name":"widget a"}]"#
     );
 
-    // PUT: rename it by id
     assert_eq!(
         server
             .put("/crud.rhp?id=1")
@@ -263,28 +257,24 @@ async fn test_crud_workflow() {
             .await
             .text()
             .trim(),
-        "{ ok: true, rowsAffected: 1 }"
+        r#"{"ok":true,"rowsAffected":1}"#
     );
 
-    // GET with ?id= returns just that widget
     assert_eq!(
         server.get("/crud.rhp?id=1").await.text().trim(),
-        r#"[{ id: 1, name: "widget a updated" }]"#
+        r#"[{"id":1,"name":"widget a updated"}]"#
     );
 
-    // GET: reflects the rename
     assert_eq!(
         server.get("/crud.rhp").await.text().trim(),
-        r#"[{ id: 1, name: "widget a updated" }]"#
+        r#"[{"id":1,"name":"widget a updated"}]"#
     );
 
-    // DELETE: remove it by id
     assert_eq!(
         server.delete("/crud.rhp?id=1").await.text().trim(),
-        "{ ok: true, rowsAffected: 1 }"
+        r#"{"ok":true,"rowsAffected":1}"#
     );
 
-    // GET: empty again
     assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
 }
 
@@ -302,8 +292,6 @@ async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
         .json(&serde_json::json!({"name": "widget b"}))
         .await;
 
-    // The whole ?id= value is bound as a single literal, so none of these may
-    // leak rows, delete anything, or drop the table.
     let attacks = [
         "1 OR 1=1",
         "' OR 1=1",
@@ -321,15 +309,14 @@ async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
         );
         assert_eq!(
             server.delete(&uri).await.text().trim(),
-            "{ ok: true, rowsAffected: 0 }",
+            r#"{"ok":true,"rowsAffected":0}"#,
             "DELETE {payload} affected rows"
         );
     }
 
-    // Neither row was deleted and the table still exists.
     assert_eq!(
         server.get("/crud.rhp").await.text().trim(),
-        r#"[{ id: 1, name: "widget a" }, { id: 2, name: "widget b" }]"#
+        r#"[{"id":1,"name":"widget a"},{"id":2,"name":"widget b"}]"#
     );
 }
 
@@ -339,7 +326,6 @@ async fn test_crud_sql_injection_body_name_stored_safely() {
     let server = TestServer::new(build_router("./public".into(), conn, None));
     server.get("/crud.rhp").await;
 
-    // A hostile name is bound as data, not spliced into SQL.
     assert_eq!(
         server
             .post("/crud.rhp")
@@ -347,13 +333,12 @@ async fn test_crud_sql_injection_body_name_stored_safely() {
             .await
             .text()
             .trim(),
-        "{ ok: true, rowsAffected: 1 }"
+        r#"{"ok":true,"rowsAffected":1}"#
     );
 
-    // The value round-trips unchanged and the table survived.
     assert_eq!(
         server.get("/crud.rhp").await.text().trim(),
-        r#"[{ id: 1, name: "x'); DROP TABLE widgets;--" }]"#
+        r#"[{"id":1,"name":"x'); DROP TABLE widgets;--"}]"#
     );
 }
 
