@@ -10,11 +10,11 @@
 
 <body>
     <p>
-        This endpoint opens a transaction, sleeps for 50&nbsp;ms, then commits.
+        This endpoint opens a transaction, sleeps for 100&nbsp;ms, then commits.
     </p>
     <rhp method="GET">
         await DB.StartTransaction();
-        await delay(50);
+        await delay(100);
         await DB.Commit();
         writeRaw("done");
     </rhp>

@@ -380,3 +380,28 @@ fn test_inject_hot_reload_script_at_end_when_no_body() {
     assert!(result.contains("EventSource"));
     assert!(!result.contains("</body>"));
 }
+
+#[tokio::test]
+async fn test_delay_rhp_refresh_overlap() {
+    let src = std::fs::read_to_string("./public/delay.rhp").unwrap();
+    let folder = temp_folder("delay_refresh_overlap", &[("delay.rhp", &src)]);
+    let conn = unique_conn().await;
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+
+    // Stagger the requests so each transaction is still held (during its
+    // delay) when the next one starts, mimicking a quick browser refresh.
+    let mut tasks = Vec::new();
+    for _ in 0..6 {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let r = server.get("/delay.rhp").await;
+            (r.status_code(), r.text())
+        }));
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    }
+    for task in tasks {
+        let (status, body) = task.await.unwrap();
+        assert!(status.is_success(), "request failed: {body}");
+        assert!(body.contains("done"), "unexpected body: {body}");
+    }
+}

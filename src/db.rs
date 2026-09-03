@@ -6,22 +6,30 @@ use tokio::sync::Mutex;
 
 pub type Object = Map<String, Value>;
 
-/// The connection reserved by an active transaction, if any. Statements run
-/// on it (instead of acquiring a fresh pooled connection) until commit or
-/// rollback releases it back to the pool.
+/// A sqlx-tracked transaction. The connection it holds is returned to the pool
+/// only once it is committed, rolled back, or dropped; dropping it without
+/// committing causes sqlx to roll it back, so a pooled connection can never be
+/// reused with a transaction still open (which would make a later `BEGIN`
+/// fail with "cannot start a transaction within a transaction").
+type TxTransaction = sqlx::Transaction<'static, Any>;
+
+/// A single pooled connection, used when no transaction is active.
 type TxConnection = sqlx::pool::PoolConnection<Any>;
 
 /// A connection acquired for running one statement: either the transaction's
 /// reserved connection (while its slot is locked) or a fresh pooled one.
 enum Acquired<'a> {
-    Tx(tokio::sync::MutexGuard<'a, Option<TxConnection>>),
+    Tx(tokio::sync::MutexGuard<'a, Option<TxTransaction>>),
     Pool(TxConnection),
 }
 
 impl<'a> Acquired<'a> {
     fn conn_mut(&mut self) -> &mut sqlx::AnyConnection {
         match self {
-            Acquired::Tx(guard) => guard.as_mut().expect("transaction connection present"),
+            Acquired::Tx(guard) => guard
+                .as_mut()
+                .expect("transaction connection present")
+                .as_mut(),
             Acquired::Pool(conn) => conn,
         }
     }
@@ -29,7 +37,7 @@ impl<'a> Acquired<'a> {
 
 async fn acquire<'a>(
     pool: &'a AnyPool,
-    tx: &'a Mutex<Option<TxConnection>>,
+    tx: &'a Mutex<Option<TxTransaction>>,
 ) -> anyhow::Result<Acquired<'a>> {
     let guard = tx.lock().await;
     if guard.is_some() {
@@ -42,7 +50,7 @@ async fn acquire<'a>(
 #[derive(Clone)]
 pub struct DbConn {
     pool: AnyPool,
-    tx: Arc<Mutex<Option<TxConnection>>>,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -50,7 +58,7 @@ pub struct QueryStmt {
     sql: String,
     binds: Vec<BindValue>,
     pool: AnyPool,
-    tx: Arc<Mutex<Option<TxConnection>>>,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -58,7 +66,7 @@ pub struct ExecStmt {
     sql: String,
     binds: Vec<BindValue>,
     pool: AnyPool,
-    tx: Arc<Mutex<Option<TxConnection>>>,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -66,7 +74,7 @@ pub struct TableStmt {
     table: String,
     conditions: Object,
     pool: AnyPool,
-    tx: Arc<Mutex<Option<TxConnection>>>,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 /// A dynamically-typed value that can be bound to a query parameter.
@@ -139,20 +147,18 @@ impl DbConn {
     }
 
     /// Begin a transaction, reserving a dedicated connection that subsequent
-    /// statements run on until [`DbConn::commit`] or [`DbConn::rollback`].
+    /// statements run on until [`DbConn::commit`] or [`DbConn::rollback`]. If
+    /// the transaction is dropped without committing, sqlx rolls it back.
     pub async fn start_transaction(&self) -> Object {
         let mut guard = self.tx.lock().await;
         if guard.is_some() {
             return error_object("a transaction is already open");
         }
-        match self.pool.acquire().await {
-            Ok(mut conn) => match sqlx::query("BEGIN").execute(&mut *conn).await {
-                Ok(_) => {
-                    *guard = Some(conn);
-                    ok_object()
-                }
-                Err(e) => error_object(&e.to_string()),
-            },
+        match self.pool.begin().await {
+            Ok(tx) => {
+                *guard = Some(tx);
+                ok_object()
+            }
             Err(e) => error_object(&e.to_string()),
         }
     }
@@ -161,7 +167,7 @@ impl DbConn {
     pub async fn commit(&self) -> Object {
         let mut guard = self.tx.lock().await;
         match guard.take() {
-            Some(mut conn) => match sqlx::query("COMMIT").execute(&mut *conn).await {
+            Some(tx) => match tx.commit().await {
                 Ok(_) => ok_object(),
                 Err(e) => error_object(&e.to_string()),
             },
@@ -170,10 +176,11 @@ impl DbConn {
     }
 
     /// Roll back the active transaction, releasing its reserved connection.
+    /// Dropping a transaction without committing also rolls it back.
     pub async fn rollback(&self) -> Object {
         let mut guard = self.tx.lock().await;
         match guard.take() {
-            Some(mut conn) => match sqlx::query("ROLLBACK").execute(&mut *conn).await {
+            Some(tx) => match tx.rollback().await {
                 Ok(_) => ok_object(),
                 Err(e) => error_object(&e.to_string()),
             },
