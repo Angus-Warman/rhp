@@ -16,12 +16,12 @@
             const table = await DB.Table("visits");
             const count = await table.Count();
             if (count === 0) {
-                await (await table.Insert({ value: 1 })).Run();
+                await table.Insert({ value: 1 }).Run();
                 write(1);
             } else {
                 const row = await table.One();
                 const visits = row.value + 1;
-                await (await table.Update({ value: visits })).Run();
+                await table.Update({ value: visits }).Run();
                 write(visits);
             }
         </rhp></strong>

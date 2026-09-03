@@ -246,8 +246,7 @@
     SOCKET.Join(room);
 
     const stmt = await DB.Query("SELECT * FROM (SELECT * FROM messages WHERE room = ? ORDER BY id DESC LIMIT 10) ORDER BY id ASC");
-    const bound = await stmt.Bind(room);
-    const history = await bound.All();
+    const history = await stmt.Bind(room).All();
 
     let historyHtml = "";
     for (const row of history) {
@@ -258,7 +257,7 @@
     SOCKET.Client().OnMessage(async raw => {
         try {
             const m = JSON.parse(raw);
-            await (await (await DB.Table("messages")).Insert({ room: room, body: raw })).Run();
+            await (await DB.Table("messages")).Insert({ room: room, body: raw }).Run();
             const html = `<div class="message"><span class="sender">${m.name}</span><span class="text">${m.text}</span></div>`;
             SOCKET.Everyone().Send({ html: html, from: SOCKET.Client().Id() });
 } catch(e) {}

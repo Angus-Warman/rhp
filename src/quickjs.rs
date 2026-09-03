@@ -209,17 +209,11 @@ fn query_stmt_object<'js>(ctx: &Ctx<'js>, stmt: QueryStmt) -> rquickjs::Result<O
     obj.set("One", one)?;
 
     let bind_stmt = stmt.clone();
-    let bind = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = bind_stmt.clone();
-            async move {
-                let json = js_to_json(&ctx, &v)?;
-                let next = query_stmt_object(&ctx, stmt.bind(&json))?;
-                Ok::<_, rquickjs::Error>(Value::from(next))
-            }
-        }),
-    )?;
+    let bind = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let json = js_to_json(&ctx, &v)?;
+        let next = query_stmt_object(&ctx, bind_stmt.bind(&json))?;
+        Ok::<_, rquickjs::Error>(Value::from(next))
+    })?;
     obj.set("Bind", bind)?;
 
     Ok(obj)
@@ -314,61 +308,45 @@ fn table_stmt_object<'js>(ctx: &Ctx<'js>, stmt: TableStmt) -> rquickjs::Result<O
     obj.set("Columns", columns)?;
 
     let insert_stmt = stmt.clone();
-    let insert = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = insert_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Insert: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.insert(&obj))?))
-            }
-        }),
-    )?;
+    let insert = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Insert: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
+            &ctx,
+            insert_stmt.insert(&obj),
+        )?))
+    })?;
     obj.set("Insert", insert)?;
 
     let update_stmt = stmt.clone();
-    let update = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = update_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Update: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.update(&obj))?))
-            }
-        }),
-    )?;
+    let update = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Update: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
+            &ctx,
+            update_stmt.update(&obj),
+        )?))
+    })?;
     obj.set("Update", update)?;
 
     let where_stmt = stmt.clone();
-    let where_fn = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = where_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Where: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(&ctx, stmt.where_(&obj))?))
-            }
-        }),
-    )?;
+    let where_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Where: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(
+            &ctx,
+            where_stmt.where_(&obj),
+        )?))
+    })?;
     obj.set("Where", where_fn)?;
 
-    let delete_stmt = stmt.clone();
-    let delete = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>| {
-            let stmt = delete_stmt.clone();
-            async move { Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.delete())?)) }
-        }),
-    )?;
+    let delete = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        let stmt = stmt.clone();
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.delete())?))
+    })?;
     obj.set("Delete", delete)?;
 
     Ok(obj)

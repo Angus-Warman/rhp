@@ -440,9 +440,7 @@ async fn test_db_exec_and_table() {
         .unwrap();
 
     engine
-        .run_section(
-            "const t = await DB.Table('t'); const i = await t.Insert({ val: 'hello' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t'); await t.Insert({ val: 'hello' }).Run()")
         .await
         .unwrap();
 
@@ -466,15 +464,13 @@ async fn test_db_query_bind() {
         .await
         .unwrap();
     engine
-        .run_section(
-            "const t = await DB.Table('t2'); const i = await t.Insert({ val: 'world' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t2'); await t.Insert({ val: 'world' }).Run()")
         .await
         .unwrap();
 
     let (_text, val) = engine
         .run_section(
-            "const s = await DB.Query('SELECT * FROM t2 WHERE val = ?'); const b = await s.Bind('world'); return JSON.stringify(await b.All())",
+            "const s = await DB.Query('SELECT * FROM t2 WHERE val = ?'); return JSON.stringify(await s.Bind('world').All())",
         )
         .await
         .unwrap();
@@ -494,15 +490,13 @@ async fn test_db_table_where() {
         .await
         .unwrap();
     engine
-        .run_section(
-            "const t = await DB.Table('t3'); const i = await t.Insert({ val: 'findme' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t3'); await t.Insert({ val: 'findme' }).Run()")
         .await
         .unwrap();
 
     let (_text, val) = engine
         .run_section(
-            "const t = await DB.Table('t3'); const w = await t.Where({ val: 'findme' }); return JSON.stringify(await w.All())",
+            "const t = await DB.Table('t3'); return JSON.stringify(await t.Where({ val: 'findme' }).All())",
         )
         .await
         .unwrap();
@@ -522,15 +516,11 @@ async fn test_db_table_count() {
         .await
         .unwrap();
     engine
-        .run_section(
-            "const t = await DB.Table('t4'); const i = await t.Insert({ val: 'a' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t4'); await t.Insert({ val: 'a' }).Run()")
         .await
         .unwrap();
     engine
-        .run_section(
-            "const t = await DB.Table('t4'); const i = await t.Insert({ val: 'b' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t4'); await t.Insert({ val: 'b' }).Run()")
         .await
         .unwrap();
 
@@ -554,15 +544,13 @@ async fn test_db_table_delete() {
         .await
         .unwrap();
     engine
-        .run_section(
-            "const t = await DB.Table('t5'); const i = await t.Insert({ val: 'gone' }); await i.Run()",
-        )
+        .run_section("const t = await DB.Table('t5'); await t.Insert({ val: 'gone' }).Run()")
         .await
         .unwrap();
 
     let (_text, val) = engine
         .run_section(
-            "const t = await DB.Table('t5'); const w = await t.Where({ val: 'gone' }); const d = await w.Delete(); return JSON.stringify(await d.Run())",
+            "const t = await DB.Table('t5'); return JSON.stringify(await t.Where({ val: 'gone' }).Delete().Run())",
         )
         .await
         .unwrap();
@@ -723,4 +711,69 @@ async fn test_run_section_optional_chaining() {
         .await
         .unwrap();
     assert_eq!(val, serde_json::json!(42));
+}
+
+#[tokio::test]
+async fn test_db_statements_chain_sync() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context()).await.unwrap();
+
+    engine
+        .run_section(
+            "const e = await DB.Exec('CREATE TABLE IF NOT EXISTS c1 (id INTEGER PRIMARY KEY, val TEXT)'); await e.Run()",
+        )
+        .await
+        .unwrap();
+
+    engine
+        .run_section("const t = await DB.Table('c1'); await t.Insert({ val: 'one' }).Run()")
+        .await
+        .unwrap();
+    engine
+        .run_section("const t = await DB.Table('c1'); await t.Insert({ val: 'two' }).Run()")
+        .await
+        .unwrap();
+
+    let (_text, val) = engine
+        .run_section(
+            "const t = await DB.Table('c1'); return JSON.stringify(await t.Where({ val: 'one' }).All())",
+        )
+        .await
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["val"], serde_json::json!("one"));
+
+    engine
+        .run_section("const t = await DB.Table('c1'); await t.Update({ val: 'updated' }).Run()")
+        .await
+        .unwrap();
+    let (_text, val) = engine
+        .run_section(
+            "const t = await DB.Table('c1'); return JSON.stringify(await t.Where({ val: 'updated' }).All())",
+        )
+        .await
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!(rows[0]["val"], serde_json::json!("updated"));
+    assert_eq!(rows[1]["val"], serde_json::json!("updated"));
+
+    let (_text, val) = engine
+        .run_section(
+            "const t = await DB.Table('c1'); return JSON.stringify(await t.Where({ val: 'updated' }).Delete().Run())",
+        )
+        .await
+        .unwrap();
+    assert!(val.to_string().contains("rowsAffected"));
+
+    let (_text, val) = engine
+        .run_section(
+            "const s = await DB.Query('SELECT * FROM c1 WHERE val = ?'); return JSON.stringify(await s.Bind('updated').All())",
+        )
+        .await
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 0);
 }
