@@ -11,9 +11,9 @@
     <p>
         This page has been visited
         <strong><rhp method="GET">
-            const exec = await DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)");
+            const exec = DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)");
             await exec.Run();
-            const table = await DB.Table("visits");
+            const table = DB.Table("visits");
             const count = await table.Count();
             if (count === 0) {
                 await table.Insert({ value: 1 }).Run();

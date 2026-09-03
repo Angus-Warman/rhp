@@ -352,6 +352,34 @@ fn table_stmt_object<'js>(ctx: &Ctx<'js>, stmt: TableStmt) -> rquickjs::Result<O
     Ok(obj)
 }
 
+/// Build the `DB` global. `Query`, `Exec` and `Table` only construct lazily
+/// evaluated statement objects (no I/O), so they are synchronous native
+/// functions; the underlying I/O happens in the terminal `.All()` / `.One()` /
+/// `.Run()` / `.Count()` / `.Columns()` methods.
+fn register_db<'js>(ctx: &Ctx<'js>, conn: DbConn) -> rquickjs::Result<Object<'js>> {
+    let db = Object::new(ctx.clone())?;
+
+    let q_conn = conn.clone();
+    let query_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, sql: String| {
+        Ok::<_, rquickjs::Error>(Value::from(query_stmt_object(&ctx, q_conn.query(&sql))?))
+    })?;
+    db.set("Query", query_fn)?;
+
+    let e_conn = conn.clone();
+    let exec_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, sql: String| {
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, e_conn.exec(&sql))?))
+    })?;
+    db.set("Exec", exec_fn)?;
+
+    let t_conn = conn.clone();
+    let table_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
+        Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(&ctx, t_conn.table(&name))?))
+    })?;
+    db.set("Table", table_fn)?;
+
+    Ok(db)
+}
+
 // ---- Engine ----
 
 /// A QuickJS-backed engine for running `.rhp` script sections. One engine is
@@ -526,52 +554,7 @@ impl Engine {
                 )?;
 
                 // DB object
-                let db = Object::new(ctx.clone())?;
-                let q_conn = conn.clone();
-                let query_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, sql: String| {
-                        let conn = q_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(query_stmt_object(
-                                &ctx,
-                                conn.query(&sql),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Query", query_fn)?;
-
-                let e_conn = conn.clone();
-                let exec_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, sql: String| {
-                        let conn = e_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
-                                &ctx,
-                                conn.exec(&sql),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Exec", exec_fn)?;
-
-                let t_conn = conn.clone();
-                let table_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, name: String| {
-                        let conn = t_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(
-                                &ctx,
-                                conn.table(&name),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Table", table_fn)?;
-
+                let db = register_db(&ctx, conn.clone())?;
                 globals.set("DB", db)?;
 
                 // SOCKET (when this request is a websocket connection)

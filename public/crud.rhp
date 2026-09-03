@@ -1,7 +1,7 @@
 <rhp method="GET">
-const exec = await DB.Exec("CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY, name TEXT)");
+const exec = DB.Exec("CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY, name TEXT)");
 await exec.Run();
-const table = await DB.Table("widgets");
+const table = DB.Table("widgets");
 if (QUERY.id) {
     writeRaw(JSON.stringify(await table.Where({ id: QUERY.id }).All()));
 } else {
@@ -10,16 +10,16 @@ if (QUERY.id) {
 </rhp>
 
 <rhp method="POST">
-const table = await DB.Table("widgets");
+const table = DB.Table("widgets");
 writeRaw(JSON.stringify(await table.Insert(BODY).Run()));
 </rhp>
 
 <rhp method="PUT">
-const table = await DB.Table("widgets");
+const table = DB.Table("widgets");
 writeRaw(JSON.stringify(await table.Where({ id: QUERY.id }).Update(BODY).Run()));
 </rhp>
 
 <rhp method="DELETE">
-const table = await DB.Table("widgets");
+const table = DB.Table("widgets");
 writeRaw(JSON.stringify(await table.Where({ id: QUERY.id }).Delete().Run()));
 </rhp>
