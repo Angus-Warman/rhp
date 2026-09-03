@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Transaction + delay</title>
+</head>
+
+<body>
+    <p>
+        This endpoint opens a transaction, sleeps for 50&nbsp;ms, then commits.
+    </p>
+    <rhp method="GET">
+        await DB.StartTransaction();
+        await delay(50);
+        await DB.Commit();
+        writeRaw("done");
+    </rhp>
+</body>
+
+</html>

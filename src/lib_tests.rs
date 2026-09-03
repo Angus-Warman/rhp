@@ -342,6 +342,27 @@ async fn test_crud_sql_injection_body_name_stored_safely() {
     );
 }
 
+#[tokio::test]
+async fn test_delay_rhp_handles_concurrent_requests() {
+    let src = std::fs::read_to_string("./public/delay.rhp").unwrap();
+    let folder = temp_folder("delay_concurrent", &[("delay.rhp", &src)]);
+    let conn = unique_conn().await;
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+
+    let mut tasks = Vec::new();
+    for _ in 0..10 {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let response = server.get("/delay.rhp").await;
+            response.assert_status_ok();
+            response.assert_text_contains("done");
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+}
+
 #[test]
 fn test_inject_hot_reload_script_before_body_close() {
     let html = "<html><body><h1>Hello</h1></body></html>";

@@ -478,6 +478,16 @@ impl Engine {
                 })?;
                 globals.set("writeRaw", write_raw)?;
 
+                // delay(ms) -> sleep for the given number of milliseconds
+                let delay = Function::new(
+                    ctx.clone(),
+                    Async(move |ms: u64| async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                        Ok::<_, rquickjs::Error>(())
+                    }),
+                )?;
+                globals.set("delay", delay)?;
+
                 // console.log -> server stdout
                 let log = console_log(&ctx)?;
                 let console = Object::new(ctx.clone())?;

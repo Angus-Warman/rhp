@@ -861,3 +861,25 @@ async fn test_transaction_requires_commit_or_rollback_first() {
         .unwrap();
     engine.run_section("await DB.Commit()").await.unwrap();
 }
+
+#[tokio::test]
+async fn test_delay_sleeps() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context()).await.unwrap();
+
+    let start = std::time::Instant::now();
+    engine.run_section("await delay(50)").await.unwrap();
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_millis(40),
+        "delay(50) returned too early: {elapsed:?}"
+    );
+
+    // delay can be awaited inline and chained with other output.
+    let (text, _) = engine
+        .run_section("write('a'); await delay(1); write('b')")
+        .await
+        .unwrap();
+    assert_eq!(text, "ab");
+}
