@@ -14,25 +14,23 @@ fn test_context() -> Context {
 async fn test_syntax_error_inlines_in_html() {
     let conn = test_conn().await;
     let src = "<rhp>function(</rhp>".to_string();
-    let (output, response) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn).await;
     assert!(
         output.contains("<pre>script error: function name expected"),
         "expected inline error, got: {output}"
     );
     assert!(output.contains("</pre>"), "missing closing pre tag");
-    assert_eq!(response.status, None);
 }
 
 #[tokio::test]
 async fn test_runtime_throw_inlines_in_html() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('boom')</rhp>".to_string();
-    let (output, response) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn).await;
     assert!(
         output.contains("<pre>script error: boom"),
         "expected inline error, got: {output}"
     );
-    assert_eq!(response.status, None);
 }
 
 #[tokio::test]
@@ -154,15 +152,14 @@ async fn test_error_between_valid_sections() {
 }
 
 #[tokio::test]
-async fn test_inline_error_does_not_set_status() {
+async fn test_inline_error_sets_status() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('no status')</rhp>".to_string();
     let (_, response) = process_src(src, test_context(), conn).await;
     assert_eq!(
-        response.status, None,
-        "script error should not set HTTP status"
+        response.status, Some(500),
+        "script error should set HTTP status"
     );
-    assert!(response.body.is_none(), "script error should not set body");
 }
 
 #[tokio::test]

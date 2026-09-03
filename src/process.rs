@@ -176,6 +176,8 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String
 
     let sections = split_src(&src);
 
+    let mut script_error_detected = false;
+
     for section in sections {
         match section {
             Section::Html(html) => output += &html,
@@ -184,6 +186,7 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String
                     Ok((text, _)) => output += &text,
                     Err(err) => {
                         output += &format!("<pre>script error: {err}</pre>");
+                        script_error_detected = true;
                     }
                 }
                 // A script that sent a full body or a redirect owns the
@@ -196,7 +199,12 @@ pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String
         }
     }
 
-    let state = engine.read_response().await;
+    let mut state = engine.read_response().await;
+
+    if script_error_detected && state.status.is_none() {
+        state.status = Some(500);
+    }
+
     let response = HttpResponse::from_state(state);
     (output, response)
 }
