@@ -405,3 +405,86 @@ async fn test_delay_rhp_refresh_overlap() {
         assert!(body.contains("done"), "unexpected body: {body}");
     }
 }
+
+#[tokio::test]
+async fn test_index_rhp_concurrent_file_db() {
+    let src = std::fs::read_to_string("./public/index.rhp").unwrap();
+    let folder = temp_folder("idx_cc", &[("index.rhp", &src)]);
+    let db = format!("sqlite://{}?mode=rwc", std::env::current_dir().unwrap().join("target/idx_cc.db").display());
+    let _ = std::fs::remove_file("target/idx_cc.db");
+    let _ = std::fs::remove_file("target/idx_cc.db-wal");
+    let _ = std::fs::remove_file("target/idx_cc.db-shm");
+    let conn = connect(&db).await.expect("conn");
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+    let mut tasks = Vec::new();
+    for _ in 0..10 {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let r = server.get("/").await;
+            let body = r.text();
+            let failed = r.status_code().as_u16() != 200 || body.contains("script error");
+            (failed, body)
+        }));
+    }
+    for t in tasks {
+        let (failed, body) = t.await.unwrap();
+        if failed {
+            eprintln!("FAILED: {}", body.lines().filter(|l| l.contains("error")).collect::<Vec<_>>().join(" | "));
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_locator_which_step_fails() {
+    let script = r##"<rhp method="GET">
+writeRaw("A[ddl]");
+const exec = DB.Exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)");
+await exec.Run();
+writeRaw("B");
+await DB.StartTransaction();
+writeRaw("C");
+const table = DB.Table("visits");
+const count = await table.Count();
+writeRaw("D(" + count + ")");
+if (count === 0) {
+  await table.Insert({ value: 1 }).Run();
+  writeRaw("E0");
+} else {
+  const row = await table.One();
+  writeRaw("E1");
+  const visits = row.value + 1;
+  await table.Update({ value: visits }).Run();
+  writeRaw("E2");
+}
+await DB.Commit();
+writeRaw("F");
+</rhp>"##;
+    let folder = temp_folder("locator", &[("index.rhp", &script)]);
+    let db = format!("sqlite://{}?mode=rwc", std::env::current_dir().unwrap().join("target/locator.db").display());
+    let _ = std::fs::remove_file("target/locator.db");
+    let _ = std::fs::remove_file("target/locator.db-wal");
+    let _ = std::fs::remove_file("target/locator.db-shm");
+    let conn = connect(&db).await.expect("conn");
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+    let mut tasks = Vec::new();
+    for _ in 0..12 {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let body = server.get("/").await.text();
+            body
+        }));
+    }
+    let mut bodies = Vec::new();
+    for t in tasks {
+        bodies.push(t.await.unwrap());
+    }
+    for b in &bodies {
+        let err = b.contains("script error");
+        if err {
+            // extract markers written so far
+            let markers: String = b.chars().filter(|c| matches!(c, 'A'..='F')).collect();
+            let et: String = b.lines().filter(|l| l.contains("script error")).collect();
+            println!("FAIL markers=[{markers}] err={et}");
+        }
+    }
+}

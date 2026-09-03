@@ -513,3 +513,88 @@ async fn test_concurrent_overlapping_transactions_two_engines() {
     assert_eq!(iso_a.commit().await.get("ok"), Some(&Value::Bool(true)));
     assert_eq!(iso_b.commit().await.get("ok"), Some(&Value::Bool(true)));
 }
+
+#[tokio::test]
+async fn test_pragma_value_on_connection() {
+    let conn = test_conn().await;
+    let mut c = conn.pool.acquire().await.unwrap();
+    use sqlx::Row;
+    let bt: i64 = sqlx::query("PRAGMA busy_timeout")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap()
+        .get(0);
+    let jm: String = sqlx::query("PRAGMA journal_mode")
+        .fetch_one(&mut *c)
+        .await
+        .unwrap()
+        .get(0);
+    println!("backend={} busy_timeout={} journal_mode={}", c.backend_name(), bt, jm);
+}
+
+#[tokio::test]
+async fn test_file_db_concurrent_visit_counter() {
+    let db = format!("sqlite://{}?mode=rwc", std::env::current_dir().unwrap().join("target/rhp_cc.db").display());
+    let _ = std::fs::remove_file("target/rhp_cc.db");
+    let _ = std::fs::remove_file("target/rhp_cc.db-wal");
+    let _ = std::fs::remove_file("target/rhp_cc.db-shm");
+    let conn = connect(&db).await.unwrap();
+
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let c = conn.clone();
+        tasks.push(tokio::spawn(async move {
+            let iso = c.isolated();
+            let t = std::time::Instant::now();
+            // Reproduce index.rhp: every request runs DDL (CREATE TABLE) and
+            // a transaction that read-modify-writes the same row.
+            let ddl = iso.exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)").run().await;
+            if ddl.get("ok") != Some(&Value::Bool(true)) { return format!("ddl err ({:?}): {ddl:?}", t.elapsed()); }
+            let start = iso.start_transaction().await;
+            if start.get("ok") != Some(&Value::Bool(true)) { return format!("start err: {start:?}"); }
+            let count = iso.table("visits").count().await;
+            if count == 0 {
+                iso.table("visits").insert(&val(r#"{"value": 1}"#)).run().await;
+            } else {
+                let n = count + 1;
+                iso.table("visits").update(&val(&format!(r#"{{"value": {n}}}"#))).run().await;
+            }
+            let commit = iso.commit().await;
+            if commit.get("ok") != Some(&Value::Bool(true)) { return format!("commit err ({:?}): {commit:?}", t.elapsed()); }
+            format!("ok in {:?}", t.elapsed())
+        }));
+    }
+    let results: Vec<_> = futures_join_all_dummy(tasks).await;
+    for r in &results { println!("RESULT: {r}"); }
+    let failures = results.iter().filter(|r| !r.starts_with("ok")).count();
+    assert_eq!(failures, 0, "failures: {results:?}");
+}
+
+async fn futures_join_all_dummy(tasks: Vec<tokio::task::JoinHandle<String>>) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in tasks { out.push(t.await.unwrap()); }
+    out
+}
+
+#[tokio::test]
+async fn test_busy_timeout_waits_on_write_conflict() {
+    let db = format!("sqlite://{}?mode=rwc", std::env::current_dir().unwrap().join("target/busy.db").display());
+    let _ = std::fs::remove_file("target/busy.db");
+    let _ = std::fs::remove_file("target/busy.db-wal");
+    let _ = std::fs::remove_file("target/busy.db-shm");
+    let conn = connect(&db).await.unwrap();
+    conn.exec("CREATE TABLE IF NOT EXISTS visits (value INTEGER)").run().await;
+
+    let c1 = conn.isolated();
+    let c2 = conn.isolated();
+    c1.start_transaction().await;
+    c2.start_transaction().await;
+    // Both write the same table -> conflict. Measure whether c2 waits (busy) or fails instantly.
+    c1.table("visits").insert(&val(r#"{"value": 1}"#)).run().await;
+    let t = std::time::Instant::now();
+    let r2 = c2.table("visits").insert(&val(r#"{"value": 2}"#)).run().await;
+    let elapsed = t.elapsed();
+    println!("c2 write result={r2:?} elapsed={elapsed:?}");
+    c1.rollback().await;
+    c2.rollback().await;
+}

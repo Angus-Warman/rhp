@@ -526,7 +526,29 @@ fn normalise_dsn(dsn: &str) -> String {
 
 pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     sqlx::any::install_default_drivers();
-    let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
+    use sqlx::any::AnyPoolOptions;
+
+    let pool = AnyPoolOptions::new()
+        // On every fresh SQLite connection, enable WAL and give the busy
+        // handler a 5000ms budget so concurrent writers wait instead of dying
+        // with "database is deadlocked". Both pragmas are best-effort: some
+        // backends (in-memory / shared-cache) cannot use WAL and will simply
+        // ignore the pragma, which is fine.
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                if conn.backend_name().to_ascii_lowercase().contains("sqlite") {
+                    let _ = sqlx::query("PRAGMA journal_mode = WAL")
+                        .execute(&mut *conn)
+                        .await;
+                    let _ = sqlx::query("PRAGMA busy_timeout = 5000")
+                        .execute(&mut *conn)
+                        .await;
+                }
+                Ok(())
+            })
+        })
+        .connect(&normalise_dsn(dsn))
+        .await?;
     Ok(DbConn {
         pool,
         tx: Arc::new(Mutex::new(None)),
