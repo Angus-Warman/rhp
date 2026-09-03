@@ -157,7 +157,8 @@ async fn test_inline_error_sets_status() {
     let src = "<rhp>throw new Error('no status')</rhp>".to_string();
     let (_, response) = process_src(src, test_context(), conn).await;
     assert_eq!(
-        response.status, Some(500),
+        response.status,
+        Some(500),
         "script error should set HTTP status"
     );
 }

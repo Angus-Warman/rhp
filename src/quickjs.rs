@@ -377,6 +377,48 @@ fn register_db<'js>(ctx: &Ctx<'js>, conn: DbConn) -> rquickjs::Result<Object<'js
     })?;
     db.set("Table", table_fn)?;
 
+    let st_conn = conn.clone();
+    let start_tx = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = st_conn.clone();
+            async move {
+                let o = conn.start_transaction().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("StartTransaction", start_tx)?;
+
+    let c_conn = conn.clone();
+    let commit = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = c_conn.clone();
+            async move {
+                let o = conn.commit().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("Commit", commit)?;
+
+    let r_conn = conn.clone();
+    let rollback = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = r_conn.clone();
+            async move {
+                let o = conn.rollback().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("Rollback", rollback)?;
+
     Ok(db)
 }
 
@@ -394,7 +436,12 @@ impl Engine {
     pub async fn new(conn: DbConn) -> Result<Engine> {
         let runtime = rquickjs::AsyncRuntime::new()?;
         let internal = AsyncContext::full(&runtime).await?;
-        Ok(Engine { internal, conn })
+        // Give each engine its own transaction slot (sharing the pool) so a
+        // transaction begun by one request never leaks into another.
+        Ok(Engine {
+            internal,
+            conn: conn.isolated(),
+        })
     }
 
     /// Register request globals into a fresh context. Sets up `RES`,

@@ -777,3 +777,87 @@ async fn test_db_statements_chain_sync() {
     let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn test_transaction_commit_persists() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context()).await.unwrap();
+
+    engine
+        .run_section("const e = DB.Exec('CREATE TABLE IF NOT EXISTS tx1 (id INTEGER PRIMARY KEY, val TEXT)'); await e.Run()")
+        .await
+        .unwrap();
+
+    // Insert inside a transaction and commit.
+    engine
+        .run_section("await DB.StartTransaction()")
+        .await
+        .unwrap();
+    let res = engine
+        .run_section("const t = DB.Table('tx1'); return JSON.stringify(await t.Insert({ val: 'kept' }).Run())")
+        .await
+        .unwrap();
+    assert!(res.1.to_string().contains("ok"));
+    engine.run_section("await DB.Commit()").await.unwrap();
+
+    // The row is visible afterwards.
+    let (_t, val) = engine
+        .run_section("const t = DB.Table('tx1'); return JSON.stringify(await t.All())")
+        .await
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["val"], serde_json::json!("kept"));
+}
+
+#[tokio::test]
+async fn test_transaction_rollback_discards() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context()).await.unwrap();
+
+    engine
+        .run_section("const e = DB.Exec('CREATE TABLE IF NOT EXISTS tx2 (id INTEGER PRIMARY KEY, val TEXT)'); await e.Run()")
+        .await
+        .unwrap();
+
+    engine
+        .run_section("await DB.StartTransaction()")
+        .await
+        .unwrap();
+    engine
+        .run_section("const t = DB.Table('tx2'); await t.Insert({ val: 'dropped' }).Run()")
+        .await
+        .unwrap();
+    engine.run_section("await DB.Rollback()").await.unwrap();
+
+    let (_t, val) = engine
+        .run_section("const t = DB.Table('tx2'); return JSON.stringify(await t.All())")
+        .await
+        .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(val.as_str().unwrap()).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_transaction_requires_commit_or_rollback_first() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context()).await.unwrap();
+
+    engine
+        .run_section("await DB.StartTransaction()")
+        .await
+        .unwrap();
+    // A second transaction while one is open must fail.
+    let result = engine.run_section("await DB.StartTransaction()").await;
+    assert!(result.is_err());
+    // Clean up so the reserved connection is released.
+    engine.run_section("await DB.Rollback()").await.unwrap();
+    engine
+        .run_section("await DB.StartTransaction()")
+        .await
+        .unwrap();
+    engine.run_section("await DB.Commit()").await.unwrap();
+}
