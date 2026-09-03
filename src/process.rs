@@ -374,3 +374,7 @@ pub fn split_src(src: &str) -> Vec<Section> {
 
     sections
 }
+
+#[cfg(test)]
+#[path = "./process_tests.rs"]
+mod process_tests;

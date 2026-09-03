@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Malformed Scripts</title>
+</head>
+
+<body>
+    <h1>Malformed script sections</h1>
+    <p>
+        Each section below is malformed. Instead of a blank page or a generic 500,
+        the error is embedded directly in the page as a <code>&lt;pre&gt;</code> block,
+        and the surrounding HTML still renders.
+    </p>
+
+    <h2>Syntax error</h2>
+    <rhp>function(</rhp>
+
+    <h2>Runtime error</h2>
+    <rhp>throw new Error('boom')</rhp>
+
+    <h2>Error between valid sections</h2>
+    <rhp>write('before -')</rhp>
+    <rhp>const x = missing.fn()</rhp>
+    <rhp>write(' - after')</rhp>
+
+</body>
+
+</html>
