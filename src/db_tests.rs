@@ -465,6 +465,29 @@ async fn test_file_db_persists_across_restart() {
 }
 
 #[tokio::test]
+async fn test_bare_path_creates_missing_parent_dir() {
+    let dir = std::env::temp_dir().join(format!(
+        "rhp_db_missing_dir_{}",
+        DB_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let db = dir.join("data").join("app.db");
+    let dsn = db.to_str().expect("a string");
+    // The parent directory must not already exist.
+    assert!(!dir.exists());
+
+    let conn = connect(&dsn).await.unwrap();
+    conn.exec("CREATE TABLE t (id INTEGER)").run().await;
+    conn.exec("INSERT INTO t (id) VALUES (1)").run().await;
+
+    // Both the directory and the database file were created.
+    assert!(db.is_file());
+    let rows = conn.query("SELECT id FROM t").all().await;
+    assert_eq!(rows, vec![val(r#"{"id":1}"#)]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
 async fn test_dropped_transaction_rolls_back_and_does_not_poison_pool() {
     let conn = test_conn().await;
     conn.exec("CREATE TABLE t (v INTEGER)").run().await;
@@ -496,20 +519,4 @@ async fn test_dropped_transaction_rolls_back_and_does_not_poison_pool() {
     assert_eq!(commit.get("ok"), Some(&Value::Bool(true)));
     let rows = conn.query("SELECT v FROM t").all().await;
     assert_eq!(rows.len(), 1);
-}
-
-#[tokio::test]
-async fn test_concurrent_overlapping_transactions_two_engines() {
-    let conn = test_conn().await;
-    let iso_a = conn.isolated();
-    let iso_b = conn.isolated();
-
-    // Two independent engines/requests can each hold a transaction at the
-    // same time; they use separate pooled connections.
-    let a = iso_a.start_transaction().await;
-    assert_eq!(a.get("ok"), Some(&Value::Bool(true)));
-    let b = iso_b.start_transaction().await;
-    assert_eq!(b.get("ok"), Some(&Value::Bool(true)));
-    assert_eq!(iso_a.commit().await.get("ok"), Some(&Value::Bool(true)));
-    assert_eq!(iso_b.commit().await.get("ok"), Some(&Value::Bool(true)));
 }

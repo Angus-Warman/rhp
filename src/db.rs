@@ -518,7 +518,7 @@ async fn configure_sqlite(conn: &mut AnyConnection) -> sqlx::Result<()> {
     Ok(())
 }
 
-async fn in_memory_connection() -> Result<DbConn, sqlx::Error> {
+async fn in_memory_connection() -> Result<DbConn> {
     // A plain ":memory:" database is per-connection, cache=shared to persist state
     let pool = sqlx::pool::PoolOptions::<Any>::new()
         .max_connections(1)
@@ -530,14 +530,23 @@ async fn in_memory_connection() -> Result<DbConn, sqlx::Error> {
     })
 }
 
-async fn sqlite_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
+async fn sqlite_connection(dsn: &str) -> Result<DbConn> {
     let normalised = if dsn.starts_with("sqlite://") {
         // The user knows what they are doing
         dsn.to_string()
     } else {
-        // A bare path: open read-write and create the file if missing.
+        // Creates folders if required
+        if let Some(parent) = std::path::Path::new(dsn)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Open in read-write-create
         format!("sqlite://{dsn}?mode=rwc")
     };
+
     let pool = sqlx::pool::PoolOptions::<Any>::new()
         .after_connect(|conn, _| Box::pin(configure_sqlite(conn)))
         .connect(&normalised)
@@ -548,7 +557,7 @@ async fn sqlite_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
     })
 }
 
-async fn postgresql_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
+async fn postgresql_connection(dsn: &str) -> Result<DbConn> {
     let pool = AnyPool::connect(dsn).await?;
     Ok(DbConn {
         pool,
@@ -556,7 +565,7 @@ async fn postgresql_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
     })
 }
 
-pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
+pub async fn connect(dsn: &str) -> Result<DbConn> {
     sqlx::any::install_default_drivers();
 
     if dsn == ":memory:" {
