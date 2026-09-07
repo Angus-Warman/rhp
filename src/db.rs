@@ -154,7 +154,7 @@ impl DbConn {
         if guard.is_some() {
             return error_object("a transaction is already open");
         }
-        match self.pool.begin().await {
+        match self.pool.begin_with("BEGIN IMMEDIATE").await {
             Ok(tx) => {
                 *guard = Some(tx);
                 ok_object()
