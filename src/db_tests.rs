@@ -463,3 +463,53 @@ async fn test_file_db_persists_across_restart() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[tokio::test]
+async fn test_dropped_transaction_rolls_back_and_does_not_poison_pool() {
+    let conn = test_conn().await;
+    conn.exec("CREATE TABLE t (v INTEGER)").run().await;
+
+    // Simulate a request that begins a transaction, writes, then is dropped
+    // without commit/rollback (e.g. a script error after StartTransaction).
+    {
+        let iso = conn.isolated();
+        let o = iso.start_transaction().await;
+        assert_eq!(o.get("ok"), Some(&Value::Bool(true)));
+        iso.exec("INSERT INTO t VALUES (1)").run().await;
+        // drop iso without commit/rollback
+    }
+
+    // The dropped transaction was rolled back by sqlx.
+    let rows = conn.query("SELECT v FROM t").all().await;
+    assert_eq!(rows.len(), 0, "abandoned transaction should be rolled back");
+
+    // And the pool connection is clean again: a later transaction works.
+    let iso2 = conn.isolated();
+    let o2 = iso2.start_transaction().await;
+    assert_eq!(
+        o2.get("ok"),
+        Some(&Value::Bool(true)),
+        "transaction must start cleanly"
+    );
+    iso2.exec("INSERT INTO t VALUES (2)").run().await;
+    let commit = iso2.commit().await;
+    assert_eq!(commit.get("ok"), Some(&Value::Bool(true)));
+    let rows = conn.query("SELECT v FROM t").all().await;
+    assert_eq!(rows.len(), 1);
+}
+
+#[tokio::test]
+async fn test_concurrent_overlapping_transactions_two_engines() {
+    let conn = test_conn().await;
+    let iso_a = conn.isolated();
+    let iso_b = conn.isolated();
+
+    // Two independent engines/requests can each hold a transaction at the
+    // same time; they use separate pooled connections.
+    let a = iso_a.start_transaction().await;
+    assert_eq!(a.get("ok"), Some(&Value::Bool(true)));
+    let b = iso_b.start_transaction().await;
+    assert_eq!(b.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(iso_a.commit().await.get("ok"), Some(&Value::Bool(true)));
+    assert_eq!(iso_b.commit().await.get("ok"), Some(&Value::Bool(true)));
+}

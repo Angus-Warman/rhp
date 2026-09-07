@@ -1,2 +1,3 @@
 - Inject hot-reload script before final </html>, but only if it exists (tests are currently inverted)
 - Move files that tests are relying on out of public, public should be a demo... but maybe just check that every file in public compiles?
+- Socket segment "first message" is a hangover, replace with explicit SOCKET.Client().Send()

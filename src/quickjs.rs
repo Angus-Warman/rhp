@@ -2,7 +2,9 @@ use anyhow::{Result, anyhow};
 use rquickjs::function::{Async, Rest};
 use rquickjs::markers::ParallelSend;
 use rquickjs::prelude::{IntoJs, Opt};
-use rquickjs::{Array, AsyncContext, Ctx, Exception, Function, Object, Promise, Type, Value};
+use rquickjs::{
+    Array, AsyncContext, CaughtError, Ctx, Exception, Function, Object, Promise, Type, Value,
+};
 use std::ops::AsyncFnOnce;
 
 use crate::db::{DbConn, ExecStmt, QueryStmt, TableStmt};
@@ -13,6 +15,17 @@ fn js_err<'js>(ctx: &Ctx<'js>, message: impl AsRef<str>) -> rquickjs::Error {
     match Exception::from_message(ctx.clone(), message.as_ref()) {
         Ok(exc) => ctx.throw(exc.into_object().into()),
         Err(e) => e,
+    }
+}
+
+fn js_err_message<'js>(ctx: &Ctx<'js>, error: rquickjs::Error) -> String {
+    match CaughtError::from_error(ctx, error) {
+        CaughtError::Exception(exc) => match exc.message() {
+            Some(msg) => msg.to_string(),
+            None => "unknown script exception".to_string(),
+        },
+        CaughtError::Value(v) => format!("{v:?}"),
+        CaughtError::Error(e) => e.to_string(),
     }
 }
 
@@ -196,17 +209,11 @@ fn query_stmt_object<'js>(ctx: &Ctx<'js>, stmt: QueryStmt) -> rquickjs::Result<O
     obj.set("One", one)?;
 
     let bind_stmt = stmt.clone();
-    let bind = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = bind_stmt.clone();
-            async move {
-                let json = js_to_json(&ctx, &v)?;
-                let next = query_stmt_object(&ctx, stmt.bind(&json))?;
-                Ok::<_, rquickjs::Error>(Value::from(next))
-            }
-        }),
-    )?;
+    let bind = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let json = js_to_json(&ctx, &v)?;
+        let next = query_stmt_object(&ctx, bind_stmt.bind(&json))?;
+        Ok::<_, rquickjs::Error>(Value::from(next))
+    })?;
     obj.set("Bind", bind)?;
 
     Ok(obj)
@@ -301,64 +308,118 @@ fn table_stmt_object<'js>(ctx: &Ctx<'js>, stmt: TableStmt) -> rquickjs::Result<O
     obj.set("Columns", columns)?;
 
     let insert_stmt = stmt.clone();
-    let insert = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = insert_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Insert: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.insert(&obj))?))
-            }
-        }),
-    )?;
+    let insert = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Insert: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
+            &ctx,
+            insert_stmt.insert(&obj),
+        )?))
+    })?;
     obj.set("Insert", insert)?;
 
     let update_stmt = stmt.clone();
-    let update = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = update_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Update: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.update(&obj))?))
-            }
-        }),
-    )?;
+    let update = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Update: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
+            &ctx,
+            update_stmt.update(&obj),
+        )?))
+    })?;
     obj.set("Update", update)?;
 
     let where_stmt = stmt.clone();
-    let where_fn = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>, v: Value<'js>| {
-            let stmt = where_stmt.clone();
-            async move {
-                let o = js_to_json(&ctx, &v)?;
-                let obj = serde_json::from_value(o).map_err(|e| {
-                    js_err(&ctx, format!("TableStmt.Where: expected an object: {e}"))
-                })?;
-                Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(&ctx, stmt.where_(&obj))?))
-            }
-        }),
-    )?;
+    let where_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, v: Value<'js>| {
+        let o = js_to_json(&ctx, &v)?;
+        let obj = serde_json::from_value(o)
+            .map_err(|e| js_err(&ctx, format!("TableStmt.Where: expected an object: {e}")))?;
+        Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(
+            &ctx,
+            where_stmt.where_(&obj),
+        )?))
+    })?;
     obj.set("Where", where_fn)?;
 
-    let delete_stmt = stmt.clone();
-    let delete = Function::new(
-        ctx.clone(),
-        Async(move |ctx: Ctx<'js>| {
-            let stmt = delete_stmt.clone();
-            async move { Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.delete())?)) }
-        }),
-    )?;
+    let delete = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+        let stmt = stmt.clone();
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, stmt.delete())?))
+    })?;
     obj.set("Delete", delete)?;
 
     Ok(obj)
+}
+
+/// Build the `DB` global. `Query`, `Exec` and `Table` only construct lazily
+/// evaluated statement objects (no I/O), so they are synchronous native
+/// functions; the underlying I/O happens in the terminal `.All()` / `.One()` /
+/// `.Run()` / `.Count()` / `.Columns()` methods.
+fn register_db<'js>(ctx: &Ctx<'js>, conn: DbConn) -> rquickjs::Result<Object<'js>> {
+    let db = Object::new(ctx.clone())?;
+
+    let q_conn = conn.clone();
+    let query_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, sql: String| {
+        Ok::<_, rquickjs::Error>(Value::from(query_stmt_object(&ctx, q_conn.query(&sql))?))
+    })?;
+    db.set("Query", query_fn)?;
+
+    let e_conn = conn.clone();
+    let exec_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, sql: String| {
+        Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(&ctx, e_conn.exec(&sql))?))
+    })?;
+    db.set("Exec", exec_fn)?;
+
+    let t_conn = conn.clone();
+    let table_fn = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| {
+        Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(&ctx, t_conn.table(&name))?))
+    })?;
+    db.set("Table", table_fn)?;
+
+    let st_conn = conn.clone();
+    let start_tx = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = st_conn.clone();
+            async move {
+                let o = conn.start_transaction().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("StartTransaction", start_tx)?;
+
+    let c_conn = conn.clone();
+    let commit = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = c_conn.clone();
+            async move {
+                let o = conn.commit().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("Commit", commit)?;
+
+    let r_conn = conn.clone();
+    let rollback = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let conn = r_conn.clone();
+            async move {
+                let o = conn.rollback().await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    db.set("Rollback", rollback)?;
+
+    Ok(db)
 }
 
 // ---- Engine ----
@@ -375,7 +436,12 @@ impl Engine {
     pub async fn new(conn: DbConn) -> Result<Engine> {
         let runtime = rquickjs::AsyncRuntime::new()?;
         let internal = AsyncContext::full(&runtime).await?;
-        Ok(Engine { internal, conn })
+        // Give each engine its own transaction slot (sharing the pool) so a
+        // transaction begun by one request never leaks into another.
+        Ok(Engine {
+            internal,
+            conn: conn.isolated(),
+        })
     }
 
     /// Register request globals into a fresh context. Sets up `RES`,
@@ -411,6 +477,16 @@ impl Engine {
                     Ok(())
                 })?;
                 globals.set("writeRaw", write_raw)?;
+
+                // delay(ms) -> sleep for the given number of milliseconds
+                let delay = Function::new(
+                    ctx.clone(),
+                    Async(move |ms: u64| async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                        Ok::<_, rquickjs::Error>(())
+                    }),
+                )?;
+                globals.set("delay", delay)?;
 
                 // console.log -> server stdout
                 let log = console_log(&ctx)?;
@@ -535,52 +611,7 @@ impl Engine {
                 )?;
 
                 // DB object
-                let db = Object::new(ctx.clone())?;
-                let q_conn = conn.clone();
-                let query_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, sql: String| {
-                        let conn = q_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(query_stmt_object(
-                                &ctx,
-                                conn.query(&sql),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Query", query_fn)?;
-
-                let e_conn = conn.clone();
-                let exec_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, sql: String| {
-                        let conn = e_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(exec_stmt_object(
-                                &ctx,
-                                conn.exec(&sql),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Exec", exec_fn)?;
-
-                let t_conn = conn.clone();
-                let table_fn = Function::new(
-                    ctx.clone(),
-                    Async(move |ctx, name: String| {
-                        let conn = t_conn.clone();
-                        async move {
-                            Ok::<_, rquickjs::Error>(Value::from(table_stmt_object(
-                                &ctx,
-                                conn.table(&name),
-                            )?))
-                        }
-                    }),
-                )?;
-                db.set("Table", table_fn)?;
-
+                let db = register_db(&ctx, conn.clone())?;
                 globals.set("DB", db)?;
 
                 // SOCKET (when this request is a websocket connection)
@@ -603,11 +634,13 @@ impl Engine {
 
         self.internal
             .async_with(async |ctx| {
-                let promise: Promise = ctx.eval(script.as_str())?;
+                let promise: Promise = ctx
+                    .eval(script.as_str())
+                    .map_err(|e| anyhow!("{}", js_err_message(&ctx, e)))?;
                 let result: Value<'_> = promise
                     .into_future()
                     .await
-                    .map_err(|e| anyhow!("script error: {e}"))?;
+                    .map_err(|e| anyhow!("{}", js_err_message(&ctx, e)))?;
                 let completion = js_to_json(&ctx, &result)?;
                 let out: Array = ctx.globals().get("__rhp_out")?;
                 let mut text = String::new();

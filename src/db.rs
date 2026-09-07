@@ -1,12 +1,56 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
-use sqlx::{AnyPool, Row};
+use sqlx::{Any, AnyPool, Row};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub type Object = Map<String, Value>;
+
+/// A sqlx-tracked transaction. The connection it holds is returned to the pool
+/// only once it is committed, rolled back, or dropped; dropping it without
+/// committing causes sqlx to roll it back, so a pooled connection can never be
+/// reused with a transaction still open (which would make a later `BEGIN`
+/// fail with "cannot start a transaction within a transaction").
+type TxTransaction = sqlx::Transaction<'static, Any>;
+
+/// A single pooled connection, used when no transaction is active.
+type TxConnection = sqlx::pool::PoolConnection<Any>;
+
+/// A connection acquired for running one statement: either the transaction's
+/// reserved connection (while its slot is locked) or a fresh pooled one.
+enum Acquired<'a> {
+    Tx(tokio::sync::MutexGuard<'a, Option<TxTransaction>>),
+    Pool(TxConnection),
+}
+
+impl<'a> Acquired<'a> {
+    fn conn_mut(&mut self) -> &mut sqlx::AnyConnection {
+        match self {
+            Acquired::Tx(guard) => guard
+                .as_mut()
+                .expect("transaction connection present")
+                .as_mut(),
+            Acquired::Pool(conn) => conn,
+        }
+    }
+}
+
+async fn acquire<'a>(
+    pool: &'a AnyPool,
+    tx: &'a Mutex<Option<TxTransaction>>,
+) -> anyhow::Result<Acquired<'a>> {
+    let guard = tx.lock().await;
+    if guard.is_some() {
+        Ok(Acquired::Tx(guard))
+    } else {
+        Ok(Acquired::Pool(pool.acquire().await?))
+    }
+}
 
 #[derive(Clone)]
 pub struct DbConn {
     pool: AnyPool,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -14,6 +58,7 @@ pub struct QueryStmt {
     sql: String,
     binds: Vec<BindValue>,
     pool: AnyPool,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -21,6 +66,7 @@ pub struct ExecStmt {
     sql: String,
     binds: Vec<BindValue>,
     pool: AnyPool,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 #[derive(Clone)]
@@ -28,6 +74,7 @@ pub struct TableStmt {
     table: String,
     conditions: Object,
     pool: AnyPool,
+    tx: Arc<Mutex<Option<TxTransaction>>>,
 }
 
 /// A dynamically-typed value that can be bound to a query parameter.
@@ -65,6 +112,7 @@ impl DbConn {
             sql: sql.to_string(),
             binds: Vec::new(),
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -75,6 +123,7 @@ impl DbConn {
             sql: sql.to_string(),
             binds: Vec::new(),
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -84,6 +133,58 @@ impl DbConn {
             table: name.to_string(),
             conditions: Map::new(),
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+
+    /// A clone sharing the same pool but with an independent transaction slot,
+    /// so each request/engine gets its own transaction state.
+    pub fn isolated(&self) -> DbConn {
+        DbConn {
+            pool: self.pool.clone(),
+            tx: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Begin a transaction, reserving a dedicated connection that subsequent
+    /// statements run on until [`DbConn::commit`] or [`DbConn::rollback`]. If
+    /// the transaction is dropped without committing, sqlx rolls it back.
+    pub async fn start_transaction(&self) -> Object {
+        let mut guard = self.tx.lock().await;
+        if guard.is_some() {
+            return error_object("a transaction is already open");
+        }
+        match self.pool.begin().await {
+            Ok(tx) => {
+                *guard = Some(tx);
+                ok_object()
+            }
+            Err(e) => error_object(&e.to_string()),
+        }
+    }
+
+    /// Commit the active transaction, releasing its reserved connection.
+    pub async fn commit(&self) -> Object {
+        let mut guard = self.tx.lock().await;
+        match guard.take() {
+            Some(tx) => match tx.commit().await {
+                Ok(_) => ok_object(),
+                Err(e) => error_object(&e.to_string()),
+            },
+            None => error_object("no transaction to commit"),
+        }
+    }
+
+    /// Roll back the active transaction, releasing its reserved connection.
+    /// Dropping a transaction without committing also rolls it back.
+    pub async fn rollback(&self) -> Object {
+        let mut guard = self.tx.lock().await;
+        match guard.take() {
+            Some(tx) => match tx.rollback().await {
+                Ok(_) => ok_object(),
+                Err(e) => error_object(&e.to_string()),
+            },
+            None => error_object("no transaction to roll back"),
         }
     }
 }
@@ -97,6 +198,7 @@ impl QueryStmt {
             sql: self.sql.clone(),
             binds,
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -118,7 +220,7 @@ impl QueryStmt {
     }
 
     async fn fetch_all(&self) -> Result<Vec<Object>> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = acquire(&self.pool, &self.tx).await?;
         let mut q = sqlx::query(sqlx::AssertSqlSafe(self.sql.clone()));
         for b in &self.binds {
             q = match b {
@@ -129,7 +231,7 @@ impl QueryStmt {
                 BindValue::Text(v) => q.bind(v.clone()),
             };
         }
-        let rows = q.fetch_all(&mut *conn).await?;
+        let rows = q.fetch_all(conn.conn_mut()).await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             out.push(row_to_object(row)?);
@@ -138,7 +240,7 @@ impl QueryStmt {
     }
 
     async fn fetch_one(&self) -> Result<Object> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = acquire(&self.pool, &self.tx).await?;
         let mut q = sqlx::query(sqlx::AssertSqlSafe(self.sql.clone()));
         for b in &self.binds {
             q = match b {
@@ -149,7 +251,7 @@ impl QueryStmt {
                 BindValue::Text(v) => q.bind(v.clone()),
             };
         }
-        let row = q.fetch_one(&mut *conn).await?;
+        let row = q.fetch_one(conn.conn_mut()).await?;
         row_to_object(&row)
     }
 }
@@ -165,7 +267,7 @@ impl ExecStmt {
     }
 
     async fn execute(&self) -> Result<Object> {
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = acquire(&self.pool, &self.tx).await?;
         let mut q = sqlx::query(sqlx::AssertSqlSafe(self.sql.clone()));
         for b in &self.binds {
             q = match b {
@@ -176,7 +278,7 @@ impl ExecStmt {
                 BindValue::Text(v) => q.bind(v.clone()),
             };
         }
-        let result = q.execute(&mut *conn).await?;
+        let result = q.execute(conn.conn_mut()).await?;
         let mut obj = Map::new();
         obj.insert("ok".to_string(), Value::Bool(true));
         obj.insert(
@@ -193,6 +295,7 @@ impl TableStmt {
             sql,
             binds,
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -207,6 +310,7 @@ impl TableStmt {
             table: self.table.clone(),
             conditions: merged,
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -289,6 +393,7 @@ impl TableStmt {
             sql,
             binds: values.values().map(BindValue::from_json).collect(),
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -310,6 +415,7 @@ impl TableStmt {
             sql: format!("UPDATE {} SET {}{}", quote_ident(&self.table), set, clause),
             binds,
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 
@@ -321,6 +427,7 @@ impl TableStmt {
             sql: format!("DELETE FROM {}{}", quote_ident(&self.table), clause),
             binds,
             pool: self.pool.clone(),
+            tx: self.tx.clone(),
         }
     }
 }
@@ -395,6 +502,12 @@ fn error_object(msg: &str) -> Object {
     obj
 }
 
+fn ok_object() -> Object {
+    let mut obj = Map::new();
+    obj.insert("ok".to_string(), Value::Bool(true));
+    obj
+}
+
 fn normalise_dsn(dsn: &str) -> String {
     if dsn.starts_with("postgres") || dsn.starts_with("sqlite") {
         // Assume the user knows what they are doing
@@ -414,7 +527,10 @@ fn normalise_dsn(dsn: &str) -> String {
 pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     sqlx::any::install_default_drivers();
     let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
-    Ok(DbConn { pool })
+    Ok(DbConn {
+        pool,
+        tx: Arc::new(Mutex::new(None)),
+    })
 }
 
 #[cfg(test)]
