@@ -20,7 +20,7 @@ struct Args {
     #[arg(short, long, env = "DEBUG")]
     debug: bool,
 
-    #[arg(long, env = "DB_CONN", default_value = ":memory:")]
+    #[arg(long, env = "DB_CONN", default_value = "./data/data.db")]
     db_conn: Option<String>,
 
     /// Enable hot-reload: watch files and auto-reload the browser on changes

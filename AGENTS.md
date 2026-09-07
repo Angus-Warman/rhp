@@ -12,7 +12,7 @@ RHP ("Rust Hypertext Preprocessor") is a PHP-like server-side scripting language
 
 ## Commands
 
-- `cargo run`, start server. Config is env-var driven (main.rs): `PORT` (3000), `FOLDER` (./public), `DEBUG`, `DB_CONN` (default `:memory:`), `HOT_RELOAD`. A `.env` file is loaded if present (missing `.env` is fine).
+- `cargo run`, start server. Config is env-var driven (main.rs): `PORT` (3000), `FOLDER` (./public), `DEBUG`, `DB_CONN` (default `./data/data.db`), `HOT_RELOAD`. A `.env` file is loaded if present (missing `.env` is fine). A bare-path `DB_CONN` auto-creates the parent directory.
 - Verify before finishing: `cargo fmt --all -- --check` → `cargo clippy` → `cargo test`. This is exactly what CI (`ci.yml`) runs on `main` pushes. The `Release` workflow also runs them before cross-target builds.
 - Tests: `cargo test` (112 tests, fast, pure in-memory). Run one: `cargo test test_socket`, `cargo test --lib process::process_tests::...`, etc.
 

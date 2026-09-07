@@ -465,6 +465,31 @@ async fn test_file_db_persists_across_restart() {
 }
 
 #[tokio::test]
+async fn test_bare_path_creates_missing_parent_directory() {
+    let dir = std::env::temp_dir().join(format!(
+        "rhp_db_dir_creation_test_{}",
+        DB_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let dsn = dir
+        .join("nested")
+        .join("data.db")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Neither the nested directory nor the file exist yet; connecting to the
+    // bare path should create the parent directory so the DB file "just works".
+    assert!(!dir.exists());
+    let conn = connect(&dsn).await.unwrap();
+    conn.exec("CREATE TABLE t (v INTEGER)").run().await;
+    assert!(dir.join("nested").is_dir(), "parent dir should be created");
+    assert!(dir.join("nested").join("data.db").is_file());
+    drop(conn);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
 async fn test_dropped_transaction_rolls_back_and_does_not_poison_pool() {
     let conn = test_conn().await;
     conn.exec("CREATE TABLE t (v INTEGER)").run().await;

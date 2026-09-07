@@ -508,6 +508,21 @@ fn ok_object() -> Object {
     obj
 }
 
+// A bare file path (e.g. "test.db" or "./data/data.db"), as opposed to a
+// full DSN (postgres://... or sqlite://...). Such paths should "just work":
+// open read-write, create the file (and its parent directory) if missing.
+fn bare_path(dsn: &str) -> Option<std::path::PathBuf> {
+    if dsn.starts_with("postgres")
+        || dsn.starts_with("sqlite")
+        || dsn == ":memory:"
+        || dsn.is_empty()
+    {
+        None
+    } else {
+        Some(std::path::PathBuf::from(dsn))
+    }
+}
+
 fn normalise_dsn(dsn: &str) -> String {
     if dsn.starts_with("postgres") || dsn.starts_with("sqlite") {
         // Assume the user knows what they are doing
@@ -526,6 +541,11 @@ fn normalise_dsn(dsn: &str) -> String {
 
 pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     sqlx::any::install_default_drivers();
+    if let Some(path) = bare_path(dsn)
+        && let Some(parent) = path.parent()
+    {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
     Ok(DbConn {
         pool,
