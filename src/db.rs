@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
-use sqlx::{Any, AnyPool, Row};
+use sqlx::{Any, AnyConnection, AnyPool, Row};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -508,29 +508,64 @@ fn ok_object() -> Object {
     obj
 }
 
-fn normalise_dsn(dsn: &str) -> String {
-    if dsn.starts_with("postgres") || dsn.starts_with("sqlite") {
-        // Assume the user knows what they are doing
-        dsn.into()
-    } else if dsn == ":memory:" {
-        // A plain ":memory:" database is per-connection, so each pooled
-        // connection would get its own empty database. Use a named shared
-        // in-memory database so every connection lands on the same one.
-        "sqlite://file%3Arhp?mode=memory&cache=shared".into()
-    } else {
-        // A bare path: open read-write and create the file if missing, so
-        // something like "test.db" just works.
-        format!("sqlite://{dsn}?mode=rwc")
-    }
+async fn configure_sqlite(conn: &mut AnyConnection) -> sqlx::Result<()> {
+    sqlx::query("PRAGMA journal_mode = WAL")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("PRAGMA busy_timeout = 5000")
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
-pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
-    sqlx::any::install_default_drivers();
-    let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
+async fn in_memory_connection() -> Result<DbConn, sqlx::Error> {
+    // A plain ":memory:" database is per-connection, cache=shared to persist state
+    let pool = sqlx::pool::PoolOptions::<Any>::new()
+        .max_connections(1)
+        .connect("sqlite://file%3Arhp?mode=memory&cache=shared")
+        .await?;
     Ok(DbConn {
         pool,
         tx: Arc::new(Mutex::new(None)),
     })
+}
+
+async fn sqlite_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
+    let normalised = if dsn.starts_with("sqlite://") {
+        // The user knows what they are doing
+        dsn.to_string()
+    } else {
+        // A bare path: open read-write and create the file if missing.
+        format!("sqlite://{dsn}?mode=rwc")
+    };
+    let pool = sqlx::pool::PoolOptions::<Any>::new()
+        .after_connect(|conn, _| Box::pin(configure_sqlite(conn)))
+        .connect(&normalised)
+        .await?;
+    Ok(DbConn {
+        pool,
+        tx: Arc::new(Mutex::new(None)),
+    })
+}
+
+async fn postgresql_connection(dsn: &str) -> Result<DbConn, sqlx::Error> {
+    let pool = AnyPool::connect(dsn).await?;
+    Ok(DbConn {
+        pool,
+        tx: Arc::new(Mutex::new(None)),
+    })
+}
+
+pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
+    sqlx::any::install_default_drivers();
+
+    if dsn == ":memory:" {
+        in_memory_connection().await
+    } else if dsn.starts_with("postgres") {
+        postgresql_connection(dsn).await
+    } else {
+        sqlite_connection(dsn).await
+    }
 }
 
 #[cfg(test)]
