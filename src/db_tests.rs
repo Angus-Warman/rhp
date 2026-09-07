@@ -490,6 +490,41 @@ async fn test_bare_path_creates_missing_parent_directory() {
 }
 
 #[tokio::test]
+async fn test_sqlite_wal_and_busy_timeout_are_set() {
+    let dir = std::env::temp_dir().join(format!(
+        "rhp_db_wal_test_{}",
+        DB_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dsn = dir.join("wal.db").to_str().unwrap().to_string();
+
+    let conn = connect(&dsn).await.unwrap();
+    conn.exec("CREATE TABLE t (v INTEGER)").run().await;
+    drop(conn);
+
+    // journal_mode=WAL is persistent in the database header, so it survives
+    // the pool being dropped. The raw driver reports its column kind as Null,
+    // so read it with try_get rather than the crate's Object conversion.
+    let pool = sqlx::AnyPool::connect(&format!("sqlite://{dsn}?mode=rwc"))
+        .await
+        .unwrap();
+    let row = sqlx::query("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mode: String = row.try_get(0).unwrap();
+    assert_eq!(mode, "wal");
+
+    // busy_timeout is per-connection; the crate's after_connect hook makes
+    // sure every pooled connection has it.
+    let conn = connect(&dsn).await.unwrap();
+    let rows = conn.query("PRAGMA busy_timeout").all().await;
+    assert_eq!(rows, vec![val(r#"{"timeout":5000}"#)]);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
 async fn test_dropped_transaction_rolls_back_and_does_not_poison_pool() {
     let conn = test_conn().await;
     conn.exec("CREATE TABLE t (v INTEGER)").run().await;

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::{Map, Value};
+use sqlx::any::AnyPoolOptions;
 use sqlx::{Any, AnyPool, Row};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -477,7 +478,20 @@ fn row_to_object(row: &sqlx::any::AnyRow) -> Result<Object> {
     for i in 0..row.len() {
         let col = row.column(i).name().to_string();
         let value: Value = match row.column(i).type_info().kind {
-            AnyTypeInfoKind::Null => Value::Null,
+            // sqlite reports columns without a declared affinity (e.g. querying
+            // a PRAGMA) as Null kind even when a real value is present; decode
+            // it here so such rows aren't lost.
+            AnyTypeInfoKind::Null => {
+                if let Ok(Some(s)) = row.try_get::<Option<String>, _>(i) {
+                    Value::String(s)
+                } else if let Ok(Some(n)) = row.try_get::<Option<i64>, _>(i) {
+                    serde_json::to_value(n).unwrap_or(Value::Null)
+                } else if let Ok(Some(b)) = row.try_get::<Option<bool>, _>(i) {
+                    Value::Bool(b)
+                } else {
+                    Value::Null
+                }
+            }
             AnyTypeInfoKind::Bool => serde_json::to_value(row.try_get::<Option<bool>, _>(i)?)?,
             AnyTypeInfoKind::SmallInt | AnyTypeInfoKind::Integer | AnyTypeInfoKind::BigInt => {
                 serde_json::to_value(row.try_get::<Option<i64>, _>(i)?)?
@@ -546,7 +560,25 @@ pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     {
         let _ = std::fs::create_dir_all(parent);
     }
-    let pool = AnyPool::connect(&normalise_dsn(dsn)).await?;
+    // SQLite (and only SQLite) gets WAL journaling and a busy timeout so
+    // concurrent readers/writers don't trip "database is locked".
+    let is_sqlite = !dsn.starts_with("postgres");
+    let pool = AnyPoolOptions::new()
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                if is_sqlite {
+                    sqlx::query("PRAGMA journal_mode = WAL;")
+                        .execute(&mut *conn)
+                        .await?;
+                    sqlx::query("PRAGMA busy_timeout = 5000;")
+                        .execute(&mut *conn)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .connect(&normalise_dsn(dsn))
+        .await?;
     Ok(DbConn {
         pool,
         tx: Arc::new(Mutex::new(None)),
