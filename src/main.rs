@@ -23,6 +23,10 @@ struct Args {
     #[arg(long, env = "DB_CONN", default_value = ":memory:")]
     db_conn: Option<String>,
 
+    /// Files folder accessible to scripts via the FILES object
+    #[arg(long, env = "FILES_FOLDER")]
+    files_folder: Option<PathBuf>,
+
     /// Enable hot-reload: watch files and auto-reload the browser on changes
     #[arg(long, env = "HOT_RELOAD")]
     watch: bool,
@@ -48,6 +52,13 @@ async fn main() -> Result<()> {
     let actual_folder = path::absolute(&folder)?;
     tracing::info!("serving {actual_folder:?}");
 
-    run_server(port, folder, &db_conn, args.watch).await?;
+    if let Some(files_dir) = &args.files_folder {
+        let absolute_files_dir = path::absolute(files_dir)?;
+        tracing::info!("scripts can access files at {absolute_files_dir:?}");
+    } else {
+        tracing::info!("FILES object disabled (no FILES_FOLDER configured)");
+    }
+
+    run_server(port, folder, &db_conn, args.files_folder, args.watch).await?;
     Ok(())
 }

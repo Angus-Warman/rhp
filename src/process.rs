@@ -5,6 +5,7 @@ use axum::http::HeaderMap;
 use axum::http::header::CONTENT_TYPE;
 
 use crate::db::DbConn;
+use crate::files::FileStore;
 use crate::quickjs::Engine;
 use crate::ws::SocketRef;
 
@@ -145,10 +146,15 @@ fn parse_body(
     Ok(serde_json::Value::Object(map))
 }
 
-pub async fn process_src(src: String, context: Context, conn: DbConn) -> (String, HttpResponse) {
+pub async fn process_src(
+    src: String,
+    context: Context,
+    conn: DbConn,
+    files: Option<FileStore>,
+) -> (String, HttpResponse) {
     let engine = match Engine::new(conn).await {
         Ok(e) => {
-            if let Err(err) = e.setup(&context).await {
+            if let Err(err) = e.setup(&context, files).await {
                 return (
                     String::new(),
                     HttpResponse {

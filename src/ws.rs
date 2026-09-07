@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::db::DbConn;
+use crate::files::FileStore;
 use crate::process::{Context, Method, split_src};
 use crate::quickjs::Engine;
 
@@ -344,6 +345,7 @@ pub async fn run_socket(
     path: PathBuf,
     conn: DbConn,
     registry: Arc<SocketRegistry>,
+    files: Option<FileStore>,
 ) {
     let mut socket = socket;
 
@@ -390,7 +392,7 @@ pub async fn run_socket(
             return;
         }
     };
-    if engine.setup(&context).await.is_err() {
+    if engine.setup(&context, files).await.is_err() {
         teardown(&registry, &state, uuid, Some(&engine)).await;
         return;
     }

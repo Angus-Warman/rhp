@@ -8,6 +8,7 @@ use rquickjs::{
 use std::ops::AsyncFnOnce;
 
 use crate::db::{DbConn, ExecStmt, QueryStmt, TableStmt};
+use crate::files::FileStore;
 use crate::process::{Context, HttpResponseState};
 
 /// Build a `rquickjs::Error` that throws a JS `Error` with the given message.
@@ -422,6 +423,134 @@ fn register_db<'js>(ctx: &Ctx<'js>, conn: DbConn) -> rquickjs::Result<Object<'js
     Ok(db)
 }
 
+/// Build the `FILES` global for scripts to read, write, list and delete files
+/// inside the configured files folder (`FILES_FOLDER`). All operations are
+/// async and return `{ ok: true, ... }` on success or `{ ok: false, error }`
+/// on failure (which becomes a thrown exception via `check_error`).
+fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Result<Object<'js>> {
+    let files = Object::new(ctx.clone())?;
+
+    // When no FILES_FOLDER is configured, register a single stub that throws
+    // on any access/subscript, so scripts don't silently hit null methods.
+    let Some(store) = store else {
+        let missing = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            Err::<Value<'js>, rquickjs::Error>(js_err(
+                &ctx,
+                "FILES is not configured: set FILES_FOLDER when starting the server",
+            ))
+        })?;
+        let nofiles = Object::new(ctx.clone())?;
+        nofiles.set("Read", missing.clone())?;
+        nofiles.set("Write", missing.clone())?;
+        nofiles.set("Exists", missing.clone())?;
+        nofiles.set("IsDir", missing.clone())?;
+        nofiles.set("Delete", missing.clone())?;
+        nofiles.set("List", missing.clone())?;
+        nofiles.set("Mkdir", missing.clone())?;
+        return Ok(nofiles);
+    };
+
+    let read_store = store.clone();
+    let read = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = read_store.clone();
+            async move {
+                let o = store.read(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("Read", read)?;
+
+    let write_store = store.clone();
+    let write = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String, contents: String| {
+            let store = write_store.clone();
+            async move {
+                let o = store.write(&rel, &contents).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("Write", write)?;
+
+    let exists_store = store.clone();
+    let exists = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = exists_store.clone();
+            async move {
+                let o = store.exists(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("Exists", exists)?;
+
+    let is_dir_store = store.clone();
+    let is_dir = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = is_dir_store.clone();
+            async move {
+                let o = store.is_dir(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("IsDir", is_dir)?;
+
+    let delete_store = store.clone();
+    let delete = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = delete_store.clone();
+            async move {
+                let o = store.delete(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("Delete", delete)?;
+
+    let list_store = store.clone();
+    let list = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = list_store.clone();
+            async move {
+                let o = store.list(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("List", list)?;
+
+    let mkdir_store = store.clone();
+    let mkdir = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, rel: String| {
+            let store = mkdir_store.clone();
+            async move {
+                let o = store.mkdir(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    files.set("Mkdir", mkdir)?;
+
+    Ok(files)
+}
+
 // ---- Engine ----
 
 /// A QuickJS-backed engine for running `.rhp` script sections. One engine is
@@ -445,9 +574,10 @@ impl Engine {
     }
 
     /// Register request globals into a fresh context. Sets up `RES`,
-    /// `QUERY`, `BODY`, `REQ`, `DB`, `console`, `VERSION`, `SOCKET` (if a
-    /// socket is present for the request), plus `write`/`writeRaw`.
-    pub async fn setup(&self, context: &Context) -> Result<()> {
+    /// `QUERY`, `BODY`, `REQ`, `DB`, `FILES`, `console`, `VERSION`,
+    /// `SOCKET` (if a socket is present for the request), plus
+    /// `write`/`writeRaw`.
+    pub async fn setup(&self, context: &Context, files: Option<FileStore>) -> Result<()> {
         let conn = self.conn.clone();
         let socket = context.socket.clone();
 
@@ -613,6 +743,10 @@ impl Engine {
                 // DB object
                 let db = register_db(&ctx, conn.clone())?;
                 globals.set("DB", db)?;
+
+                // FILES object (when a FILES_FOLDER was provided)
+                let files_obj = register_files(&ctx, files.clone())?;
+                globals.set("FILES", files_obj)?;
 
                 // SOCKET (when this request is a websocket connection)
                 if let Some(socket) = &socket {

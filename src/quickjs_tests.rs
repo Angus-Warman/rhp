@@ -1,4 +1,5 @@
 use crate::db::DbConn;
+use crate::files::FileStore;
 use crate::process::Context;
 use crate::quickjs::Engine;
 
@@ -22,7 +23,7 @@ async fn test_engine_creates() {
 async fn test_run_section_basic() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _val) = engine.run_section("write('hello')").await.unwrap();
     assert_eq!(text, "hello");
 }
@@ -31,7 +32,7 @@ async fn test_run_section_basic() {
 async fn test_run_section_write_raw() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine.run_section("writeRaw('<b>bold</b>')").await.unwrap();
     assert_eq!(text, "<b>bold</b>");
 }
@@ -40,7 +41,7 @@ async fn test_run_section_write_raw() {
 async fn test_run_section_write_escapes_html() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine.run_section("write('<script>')").await.unwrap();
     assert_eq!(text, "&lt;script&gt;");
 }
@@ -49,7 +50,7 @@ async fn test_run_section_write_escapes_html() {
 async fn test_run_section_multiple_writes() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("write('a'); write('b'); writeRaw('c')")
         .await
@@ -61,7 +62,7 @@ async fn test_run_section_multiple_writes() {
 async fn test_run_section_completion_value() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine.run_section("return 42").await.unwrap();
     assert_eq!(val, serde_json::json!(42));
 }
@@ -70,7 +71,7 @@ async fn test_run_section_completion_value() {
 async fn test_run_section_console_log() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine
         .run_section("console.log('test', 123)")
         .await
@@ -83,7 +84,7 @@ async fn test_run_section_query_global() {
     let engine = Engine::new(conn).await.unwrap();
     let mut ctx = test_context();
     ctx.query.insert("id".into(), "42".into());
-    engine.setup(&ctx).await.unwrap();
+    engine.setup(&ctx, None).await.unwrap();
     let (text, _) = engine.run_section("write(QUERY.id)").await.unwrap();
     assert_eq!(text, "42");
 }
@@ -94,7 +95,7 @@ async fn test_run_section_body_global() {
     let engine = Engine::new(conn).await.unwrap();
     let mut ctx = test_context();
     ctx.body = serde_json::json!({"name": "test"});
-    engine.setup(&ctx).await.unwrap();
+    engine.setup(&ctx, None).await.unwrap();
     let (text, _) = engine
         .run_section("writeRaw(JSON.stringify(BODY))")
         .await
@@ -108,7 +109,7 @@ async fn test_run_section_req_headers() {
     let engine = Engine::new(conn).await.unwrap();
     let mut ctx = test_context();
     ctx.headers.insert("x-test".into(), "hello".into());
-    engine.setup(&ctx).await.unwrap();
+    engine.setup(&ctx, None).await.unwrap();
     let (text, _) = engine
         .run_section("write(REQ.Headers['x-test'])")
         .await
@@ -120,7 +121,7 @@ async fn test_run_section_req_headers() {
 async fn test_run_section_version() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine.run_section("write(VERSION)").await.unwrap();
     assert_eq!(text, "0.0.2");
 }
@@ -129,7 +130,7 @@ async fn test_run_section_version() {
 async fn test_read_response_status() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine.run_section("RES.Status = 404").await.unwrap();
     let state = engine.read_response().await;
     assert_eq!(state.status, Some(404));
@@ -139,7 +140,7 @@ async fn test_read_response_status() {
 async fn test_read_response_json() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine.run_section("RES.Json({ ok: true })").await.unwrap();
     let state = engine.read_response().await;
     assert_eq!(state.body.as_deref(), Some(r#"{"ok":true}"#));
@@ -150,7 +151,7 @@ async fn test_read_response_json() {
 async fn test_read_response_html() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine.run_section("RES.Html('<h1>Hi</h1>')").await.unwrap();
     let state = engine.read_response().await;
     assert_eq!(state.body.as_deref(), Some("<h1>Hi</h1>"));
@@ -161,7 +162,7 @@ async fn test_read_response_html() {
 async fn test_read_response_redirect() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine.run_section("RES.Redirect('/other')").await.unwrap();
     let state = engine.read_response().await;
     assert_eq!(state.redirect.as_deref(), Some("/other"));
@@ -173,7 +174,7 @@ async fn test_read_response_redirect() {
 async fn test_read_response_set_cookie() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine
         .run_section("RES.SetCookie('sid', 'abc', { Path: '/', HttpOnly: true })")
         .await
@@ -186,7 +187,7 @@ async fn test_read_response_set_cookie() {
 async fn test_read_response_status_does_not_own_response() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     engine.run_section("RES.Status = 410").await.unwrap();
     let state = engine.read_response().await;
     assert_eq!(state.status, Some(410));
@@ -197,7 +198,7 @@ async fn test_read_response_status_does_not_own_response() {
 async fn test_run_section_script_error() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let err = engine.run_section("throw new Error('boom')").await;
     assert!(err.is_err());
 }
@@ -206,7 +207,7 @@ async fn test_run_section_script_error() {
 async fn test_run_section_undefined_var_is_not_error() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let result = engine.run_section("undefined").await;
     assert!(result.is_ok());
 }
@@ -215,7 +216,7 @@ async fn test_run_section_undefined_var_is_not_error() {
 async fn test_run_section_arithmetic() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine.run_section("return 2 + 3 * 4").await.unwrap();
     assert_eq!(val, serde_json::json!(14));
 }
@@ -224,7 +225,7 @@ async fn test_run_section_arithmetic() {
 async fn test_run_section_string_concat() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("write('hello ' + 'world')")
         .await
@@ -236,7 +237,7 @@ async fn test_run_section_string_concat() {
 async fn test_run_section_let_and_const() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("const x = 10; let y = 20; return x + y")
         .await
@@ -248,7 +249,7 @@ async fn test_run_section_let_and_const() {
 async fn test_run_section_if_else() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("if (true) { write('yes') } else { write('no') }")
         .await
@@ -260,7 +261,7 @@ async fn test_run_section_if_else() {
 async fn test_run_section_for_loop() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("for (let i = 0; i < 3; i++) { write(String(i)) }")
         .await
@@ -272,7 +273,7 @@ async fn test_run_section_for_loop() {
 async fn test_run_section_for_in() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section(
             "const obj = {a: 1, b: 2}; let sum = 0; for (const k in obj) { sum += obj[k] }; return sum",
@@ -286,7 +287,7 @@ async fn test_run_section_for_in() {
 async fn test_run_section_arrow_function() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("const add = (a, b) => a + b; return add(3, 4)")
         .await
@@ -298,7 +299,7 @@ async fn test_run_section_arrow_function() {
 async fn test_run_section_try_catch() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("try { throw new Error('fail') } catch(e) { write('caught') }")
         .await
@@ -310,7 +311,7 @@ async fn test_run_section_try_catch() {
 async fn test_run_section_json_parse_stringify() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("const o = JSON.parse('{\"x\":1}'); return o.x + 1")
         .await
@@ -322,7 +323,7 @@ async fn test_run_section_json_parse_stringify() {
 async fn test_run_section_json_stringify() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return JSON.stringify({ a: 1 })")
         .await
@@ -334,7 +335,7 @@ async fn test_run_section_json_stringify() {
 async fn test_run_section_date_now() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return typeof Date.now()")
         .await
@@ -346,7 +347,7 @@ async fn test_run_section_date_now() {
 async fn test_run_section_math() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return Math.max(1, 2, 3)")
         .await
@@ -358,7 +359,7 @@ async fn test_run_section_math() {
 async fn test_run_section_array_methods() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return [1,2,3].map(x => x * 2).filter(x => x > 3)")
         .await
@@ -370,7 +371,7 @@ async fn test_run_section_array_methods() {
 async fn test_run_section_object_spread() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("writeRaw(JSON.stringify({ ...{a:1}, b:2 }))")
         .await
@@ -382,7 +383,7 @@ async fn test_run_section_object_spread() {
 async fn test_run_section_string_methods() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return 'Hello World'.toLowerCase().split(' ')")
         .await
@@ -394,7 +395,7 @@ async fn test_run_section_string_methods() {
 async fn test_run_section_number_methods() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return Number.isInteger(42) && !Number.isInteger(3.14)")
         .await
@@ -406,7 +407,7 @@ async fn test_run_section_number_methods() {
 async fn test_run_section_await_promise() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return await Promise.resolve(42)")
         .await
@@ -418,7 +419,7 @@ async fn test_run_section_await_promise() {
 async fn test_run_section_async_await() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("async function double(n) { return n * 2 }; return await double(21)")
         .await
@@ -430,7 +431,7 @@ async fn test_run_section_async_await() {
 async fn test_db_exec_and_table() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -455,7 +456,7 @@ async fn test_db_exec_and_table() {
 async fn test_db_query_bind() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -481,7 +482,7 @@ async fn test_db_query_bind() {
 async fn test_db_table_where() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -507,7 +508,7 @@ async fn test_db_table_where() {
 async fn test_db_table_count() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -535,7 +536,7 @@ async fn test_db_table_count() {
 async fn test_db_table_delete() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -561,7 +562,7 @@ async fn test_db_table_delete() {
 async fn test_db_error_throws() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     let result = engine
         .run_section("const s = DB.Query('INVALID SQL'); await s.All()")
@@ -573,7 +574,7 @@ async fn test_db_error_throws() {
 async fn test_run_section_switch() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section(
             r#"switch (2) {
@@ -591,7 +592,7 @@ async fn test_run_section_switch() {
 async fn test_run_section_ternary() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("write(true ? 'yes' : 'no')")
         .await
@@ -603,7 +604,7 @@ async fn test_run_section_ternary() {
 async fn test_run_section_bitwise() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine.run_section("return 5 & 3").await.unwrap();
     assert_eq!(val, serde_json::json!(1));
 }
@@ -612,7 +613,7 @@ async fn test_run_section_bitwise() {
 async fn test_run_section_comparisons() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return '1' == 1 && '1' !== 1")
         .await
@@ -624,7 +625,7 @@ async fn test_run_section_comparisons() {
 async fn test_run_section_typeof() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return typeof null + ' ' + typeof undefined + ' ' + typeof 42 + ' ' + typeof 'hi' + ' ' + typeof true + ' ' + typeof {} + ' ' + typeof []")
         .await
@@ -639,7 +640,7 @@ async fn test_run_section_typeof() {
 async fn test_run_section_closure() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section(
             "function makeCounter() { let n = 0; return () => ++n }; const c = makeCounter(); return c() + c() + c()",
@@ -653,7 +654,7 @@ async fn test_run_section_closure() {
 async fn test_run_section_class() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section(
             "class Foo { constructor(x) { this.x = x } get() { return this.x * 2 } }; return new Foo(5).get()",
@@ -667,7 +668,7 @@ async fn test_run_section_class() {
 async fn test_run_section_destructuring() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section(
             "const { a, b } = { a: 10, b: 20 }; const [x, , z] = [1, 2, 3]; return a + b + x + z",
@@ -681,7 +682,7 @@ async fn test_run_section_destructuring() {
 async fn test_run_section_template_literal() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (text, _) = engine
         .run_section("const name = 'World'; write(`Hello ${name}!`)")
         .await
@@ -693,7 +694,7 @@ async fn test_run_section_template_literal() {
 async fn test_run_section_nullish_coalescing() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("return null ?? 'fallback'")
         .await
@@ -705,7 +706,7 @@ async fn test_run_section_nullish_coalescing() {
 async fn test_run_section_optional_chaining() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
     let (_text, val) = engine
         .run_section("const o = { a: { b: 42 } }; return o?.a?.b")
         .await
@@ -717,7 +718,7 @@ async fn test_run_section_optional_chaining() {
 async fn test_db_statements_chain_sync() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section(
@@ -782,7 +783,7 @@ async fn test_db_statements_chain_sync() {
 async fn test_transaction_commit_persists() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section("const e = DB.Exec('CREATE TABLE IF NOT EXISTS tx1 (id INTEGER PRIMARY KEY, val TEXT)'); await e.Run()")
@@ -815,7 +816,7 @@ async fn test_transaction_commit_persists() {
 async fn test_transaction_rollback_discards() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section("const e = DB.Exec('CREATE TABLE IF NOT EXISTS tx2 (id INTEGER PRIMARY KEY, val TEXT)'); await e.Run()")
@@ -844,7 +845,7 @@ async fn test_transaction_rollback_discards() {
 async fn test_transaction_requires_commit_or_rollback_first() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     engine
         .run_section("await DB.StartTransaction()")
@@ -866,7 +867,7 @@ async fn test_transaction_requires_commit_or_rollback_first() {
 async fn test_delay_sleeps() {
     let conn = test_conn().await;
     let engine = Engine::new(conn).await.unwrap();
-    engine.setup(&test_context()).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
 
     let start = std::time::Instant::now();
     engine.run_section("await delay(50)").await.unwrap();
@@ -882,4 +883,116 @@ async fn test_delay_sleeps() {
         .await
         .unwrap();
     assert_eq!(text, "ab");
+}
+
+static FILES_DIR_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn files_test_dir() -> std::path::PathBuf {
+    let id = FILES_DIR_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("rhp_qjs_files_{}", std::process::id()));
+    dir.join(format!("{id}"))
+}
+
+#[tokio::test]
+async fn test_files_write_and_read_globals() {
+    let conn = test_conn().await;
+    let dir = files_test_dir();
+    let engine = Engine::new(conn).await.unwrap();
+    engine
+        .setup(&test_context(), Some(FileStore::new(dir.clone())))
+        .await
+        .unwrap();
+
+    let (text, _) = engine
+        .run_section(
+            "await FILES.Write('note.txt', 'hello files'); writeRaw(JSON.stringify(await FILES.Read('note.txt')))",
+        )
+        .await
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({"ok": true, "contents": "hello files"})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_files_list_and_delete_globals() {
+    let conn = test_conn().await;
+    let dir = files_test_dir();
+    let engine = Engine::new(conn).await.unwrap();
+    engine
+        .setup(&test_context(), Some(FileStore::new(dir.clone())))
+        .await
+        .unwrap();
+
+    engine
+        .run_section("await FILES.Write('one.txt', '1')")
+        .await
+        .unwrap();
+    engine
+        .run_section("await FILES.Mkdir('sub')")
+        .await
+        .unwrap();
+
+    let (text, _) = engine
+        .run_section(
+            "const r = await FILES.Exists('one.txt'); write(String(r.exists)); const l = await FILES.List('.'); writeRaw(JSON.stringify(l.entries))",
+        )
+        .await
+        .unwrap();
+    let (_exists, entries) = text.split_once('[').unwrap();
+    let entries: serde_json::Value = serde_json::from_str(&format!("[{entries}")).unwrap();
+    assert_eq!(
+        entries,
+        serde_json::json!([
+            {"name": "one.txt", "isDir": false},
+            {"name": "sub", "isDir": true},
+        ])
+    );
+
+    engine
+        .run_section("await FILES.Delete('one.txt')")
+        .await
+        .unwrap();
+    let (text, _) = engine
+        .run_section("const r = await FILES.Exists('one.txt'); write(String(r.exists))")
+        .await
+        .unwrap();
+    assert!(text.ends_with("false"), "unexpected: {text:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_files_missing_folder_methods_throw() {
+    let conn = test_conn().await;
+    let engine = Engine::new(conn).await.unwrap();
+    engine.setup(&test_context(), None).await.unwrap();
+
+    let result = engine.run_section("await FILES.Read('x.txt')").await;
+    assert!(result.is_err());
+
+    let result = engine.run_section("await FILES.Write('x.txt', 'y')").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_files_traversal_throws() {
+    let conn = test_conn().await;
+    let dir = files_test_dir();
+    let engine = Engine::new(conn).await.unwrap();
+    engine
+        .setup(&test_context(), Some(FileStore::new(dir.clone())))
+        .await
+        .unwrap();
+
+    let result = engine.run_section("await FILES.Read('../evil.txt')").await;
+    assert!(result.is_err());
+
+    let result = engine
+        .run_section("await FILES.Write('/etc/passwd', 'pwned')")
+        .await;
+    assert!(result.is_err());
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -14,7 +14,7 @@ fn test_context() -> Context {
 async fn test_syntax_error_inlines_in_html() {
     let conn = test_conn().await;
     let src = "<rhp>function(</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("<pre>script error: function name expected"),
         "expected inline error, got: {output}"
@@ -26,7 +26,7 @@ async fn test_syntax_error_inlines_in_html() {
 async fn test_runtime_throw_inlines_in_html() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('boom')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("<pre>script error: boom"),
         "expected inline error, got: {output}"
@@ -37,7 +37,7 @@ async fn test_runtime_throw_inlines_in_html() {
 async fn test_html_before_error_is_preserved() {
     let conn = test_conn().await;
     let src = "<h1>Hello</h1>\n<rhp>throw new Error('x')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(output.contains("<h1>Hello</h1>"), "html lost: {output}");
     assert!(
         output.contains("<pre>script error:"),
@@ -53,7 +53,7 @@ async fn test_html_before_error_is_preserved() {
 async fn test_html_after_error_is_preserved() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('y')</rhp>\n<p>after</p>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("<pre>script error:"),
         "error lost: {output}"
@@ -72,7 +72,7 @@ async fn test_html_after_error_is_preserved() {
 async fn test_multiple_errors_each_shown() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('one')</rhp>\n<rhp>throw new Error('two')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     let count = output.matches("<pre>script error:").count();
     assert_eq!(count, 2, "expected 2 error blocks, got {count}: {output}");
 }
@@ -81,7 +81,7 @@ async fn test_multiple_errors_each_shown() {
 async fn test_unclosed_rhp_tag_executes_as_code() {
     let conn = test_conn().await;
     let src = "<rhp>write('unclosed')".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("unclosed"),
         "code should still run: {output}"
@@ -92,7 +92,7 @@ async fn test_unclosed_rhp_tag_executes_as_code() {
 async fn test_malformed_method_still_runs() {
     let conn = test_conn().await;
     let src = "<rhp method=broken>write('works')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("works"),
         "should run with All method: {output}"
@@ -103,7 +103,7 @@ async fn test_malformed_method_still_runs() {
 async fn test_valid_script_no_error() {
     let conn = test_conn().await;
     let src = "<rhp>write('all good')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert_eq!(output, "all good");
     assert!(
         !output.contains("<pre>"),
@@ -115,7 +115,7 @@ async fn test_valid_script_no_error() {
 async fn test_empty_script_section() {
     let conn = test_conn().await;
     let src = "<rhp></rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert_eq!(output, "");
 }
 
@@ -128,7 +128,7 @@ async fn test_method_mismatch_skips_section() {
     };
     let src =
         "<rhp method=\"POST\">throw new Error('should not run')</rhp>\n<p>visible</p>".to_string();
-    let (output, _) = process_src(src, context, conn).await;
+    let (output, _) = process_src(src, context, conn, None).await;
     assert!(output.contains("<p>visible</p>"), "html lost: {output}");
     assert!(
         !output.contains("<pre>"),
@@ -142,7 +142,7 @@ async fn test_error_between_valid_sections() {
     let src =
         "<rhp>write('before')</rhp>\n<rhp>throw new Error('oops')</rhp>\n<rhp>write('after')</rhp>"
             .to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(output.contains("before"), "first section lost: {output}");
     assert!(
         output.contains("<pre>script error:"),
@@ -155,7 +155,7 @@ async fn test_error_between_valid_sections() {
 async fn test_inline_error_sets_status() {
     let conn = test_conn().await;
     let src = "<rhp>throw new Error('no status')</rhp>".to_string();
-    let (_, response) = process_src(src, test_context(), conn).await;
+    let (_, response) = process_src(src, test_context(), conn, None).await;
     assert_eq!(
         response.status,
         Some(500),
@@ -167,7 +167,7 @@ async fn test_inline_error_sets_status() {
 async fn test_raw_syntax_error_inlines_in_html() {
     let conn = test_conn().await;
     let src = "<rhp>if (</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("<pre>"),
         "syntax error should produce pre tag: {output}"
@@ -182,7 +182,7 @@ async fn test_raw_syntax_error_inlines_in_html() {
 async fn test_division_by_zero_throws() {
     let conn = test_conn().await;
     let src = "<rhp>const x = 1 / 0; throw new Error('bad')</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert!(
         output.contains("<pre>script error:"),
         "expected error: {output}"
@@ -194,7 +194,7 @@ async fn test_try_catch_prevents_error() {
     let conn = test_conn().await;
     let src =
         "<rhp>try { throw new Error('caught') } catch(e) { write('handled') }</rhp>".to_string();
-    let (output, _) = process_src(src, test_context(), conn).await;
+    let (output, _) = process_src(src, test_context(), conn, None).await;
     assert_eq!(output, "handled");
     assert!(
         !output.contains("<pre>"),

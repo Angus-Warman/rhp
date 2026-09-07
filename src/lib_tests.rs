@@ -8,7 +8,7 @@ static DB_ID: AtomicU64 = AtomicU64::new(0);
 
 async fn test_server() -> TestServer {
     let conn = unique_conn().await;
-    TestServer::new(build_router("./public".into(), conn, None))
+    TestServer::new(build_router("./public".into(), conn, None, None))
 }
 
 async fn unique_conn() -> DbConn {
@@ -48,7 +48,7 @@ async fn test_response_controls_http_status_and_redirect() {
         ],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn, None));
+    let server = TestServer::new(build_router(folder, conn, None, None));
 
     let gone = server.get("/gone.rhp").await;
     gone.assert_status(axum::http::StatusCode::GONE);
@@ -89,7 +89,7 @@ async fn test_index_rhp_visit_counter() {
         &[("index.rhp", &src), ("index.html", "<h1>static</h1>")],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn, None));
+    let server = TestServer::new(build_router(folder, conn, None, None));
     for expected in 1..=3 {
         let response = server.get("/").await;
         response.assert_status_ok();
@@ -107,7 +107,7 @@ async fn test_root_prefers_index_rhp() {
         ],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn, None));
+    let server = TestServer::new(build_router(folder, conn, None, None));
     let response = server.get("/").await;
     response.assert_status_ok();
     response.assert_text_contains("rhp index");
@@ -120,7 +120,7 @@ async fn test_root_serves_static_index_without_rhp() {
         &[("index.html", "<h1>static index</h1>")],
     );
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router(folder, conn, None));
+    let server = TestServer::new(build_router(folder, conn, None, None));
     let response = server.get("/").await;
     response.assert_status_ok();
     response.assert_text_contains("static index");
@@ -231,7 +231,7 @@ async fn test_body_global_invalid_json_is_400() {
 #[tokio::test]
 async fn test_crud_workflow() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn, None));
+    let server = TestServer::new(build_router("./public".into(), conn, None, None));
 
     assert_eq!(server.get("/crud.rhp").await.text().trim(), "[]");
 
@@ -281,7 +281,7 @@ async fn test_crud_workflow() {
 #[tokio::test]
 async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn, None));
+    let server = TestServer::new(build_router("./public".into(), conn, None, None));
     server.get("/crud.rhp").await;
     server
         .post("/crud.rhp")
@@ -323,7 +323,7 @@ async fn test_crud_sql_injection_id_neither_leaks_nor_drops() {
 #[tokio::test]
 async fn test_crud_sql_injection_body_name_stored_safely() {
     let conn = unique_conn().await;
-    let server = TestServer::new(build_router("./public".into(), conn, None));
+    let server = TestServer::new(build_router("./public".into(), conn, None, None));
     server.get("/crud.rhp").await;
 
     assert_eq!(
@@ -347,7 +347,7 @@ async fn test_delay_rhp_handles_concurrent_requests() {
     let src = std::fs::read_to_string("./public/delay.rhp").unwrap();
     let folder = temp_folder("delay_concurrent", &[("delay.rhp", &src)]);
     let conn = unique_conn().await;
-    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None, None)));
 
     let mut tasks = Vec::new();
     for _ in 0..10 {
@@ -386,7 +386,7 @@ async fn test_delay_rhp_refresh_overlap() {
     let src = std::fs::read_to_string("./public/delay.rhp").unwrap();
     let folder = temp_folder("delay_refresh_overlap", &[("delay.rhp", &src)]);
     let conn = unique_conn().await;
-    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None)));
+    let server = std::sync::Arc::new(TestServer::new(build_router(folder, conn, None, None)));
 
     // Stagger the requests so each transaction is still held (during its
     // delay) when the next one starts, mimicking a quick browser refresh.

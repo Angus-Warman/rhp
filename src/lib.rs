@@ -23,16 +23,24 @@ use tracing::Level;
 
 use crate::{
     db::{DbConn, connect},
+    files::FileStore,
     process::{Context, process_src},
     ws::{SocketRegistry, run_socket},
 };
 
 mod db;
+mod files;
 mod process;
 mod quickjs;
 mod ws;
 
-pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, watch_mode: bool) -> Result<()> {
+pub async fn run_server(
+    port: u16,
+    folder: PathBuf,
+    db_conn: &str,
+    files_folder: Option<PathBuf>,
+    watch_mode: bool,
+) -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
     let conn = connect(db_conn).await?;
 
@@ -50,7 +58,7 @@ pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, watch_mode: b
         None
     };
 
-    let app = build_router(folder, conn, tx);
+    let app = build_router(folder, conn, files_folder, tx);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let local = listener.local_addr()?;
     tracing::info!("listening on http://{local}");
@@ -61,14 +69,22 @@ pub async fn run_server(port: u16, folder: PathBuf, db_conn: &str, watch_mode: b
 #[derive(Clone)]
 struct AppState {
     folder: PathBuf,
+    files: Option<FileStore>,
     conn: DbConn,
     sockets: Arc<SocketRegistry>,
     tx: Option<broadcast::Sender<String>>,
 }
 
-fn build_router(folder: PathBuf, conn: DbConn, tx: Option<broadcast::Sender<String>>) -> Router {
+fn build_router(
+    folder: PathBuf,
+    conn: DbConn,
+    files_folder: Option<PathBuf>,
+    tx: Option<broadcast::Sender<String>>,
+) -> Router {
+    let files = files_folder.map(FileStore::new);
     let state = AppState {
         folder,
+        files,
         conn,
         sockets: Arc::new(SocketRegistry::new()),
         tx,
@@ -103,20 +119,27 @@ async fn rhp_handler(State(state): State<AppState>, request: Request) -> Respons
         return upgrade
             .on_upgrade(move |socket| {
                 let folder = state.folder.clone();
+                let files = state.files.clone();
                 let conn = state.conn.clone();
                 let sockets = state.sockets.clone();
                 async move {
                     let path = resolve_rhp(&folder, uri.path());
-                    run_socket(socket, uri, path.unwrap_or(folder), conn, sockets).await;
+                    run_socket(socket, uri, path.unwrap_or(folder), conn, sockets, files).await;
                 }
             })
             .into_response();
     }
 
     match resolve_rhp(&state.folder, request.uri().path()) {
-        Some(rhp) => process_rhp(rhp, request, state.conn, state.tx.is_some())
-            .await
-            .into_response(),
+        Some(rhp) => process_rhp(
+            rhp,
+            request,
+            state.conn,
+            state.files.clone(),
+            state.tx.is_some(),
+        )
+        .await
+        .into_response(),
         None => ServeDir::new(state.folder)
             .oneshot(request)
             .await
@@ -153,7 +176,13 @@ fn is_ws_upgrade(request: &Request) -> bool {
     has(header::CONNECTION) && has(header::UPGRADE)
 }
 
-async fn process_rhp(path: PathBuf, request: Request, conn: DbConn, hot_reload: bool) -> Response {
+async fn process_rhp(
+    path: PathBuf,
+    request: Request,
+    conn: DbConn,
+    files: Option<FileStore>,
+    hot_reload: bool,
+) -> Response {
     match tokio::fs::read_to_string(path).await {
         Ok(src) => {
             let context = match Context::from_request(request).await {
@@ -162,7 +191,7 @@ async fn process_rhp(path: PathBuf, request: Request, conn: DbConn, hot_reload: 
                     return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
                 }
             };
-            let (html, response) = process_src(src, context, conn).await;
+            let (html, response) = process_src(src, context, conn, files).await;
             let html = if hot_reload {
                 inject_hot_reload_script(&html)
             } else {
