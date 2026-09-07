@@ -23,7 +23,7 @@ struct Args {
     #[arg(long, env = "DB_CONN", default_value = ":memory:")]
     db_conn: Option<String>,
 
-    /// Files folder accessible to scripts via the FILES object
+    /// Files folder accessible to scripts via the FILE object
     #[arg(long, env = "FILES_FOLDER")]
     files_folder: Option<PathBuf>,
 
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
         let absolute_files_dir = path::absolute(files_dir)?;
         tracing::info!("scripts can access files at {absolute_files_dir:?}");
     } else {
-        tracing::info!("FILES object disabled (no FILES_FOLDER configured)");
+        tracing::info!("FILE object disabled (no FILES_FOLDER configured)");
     }
 
     run_server(port, folder, &db_conn, args.files_folder, args.watch).await?;

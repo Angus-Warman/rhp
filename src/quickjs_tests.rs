@@ -905,7 +905,7 @@ async fn test_files_write_and_read_globals() {
 
     let (text, _) = engine
         .run_section(
-            "await FILES.Write('note.txt', 'hello files'); writeRaw(JSON.stringify(await FILES.Read('note.txt')))",
+            "await FILE.Open('note.txt').Write('hello files'); writeRaw(JSON.stringify(await FILE.Open('note.txt').Read()))",
         )
         .await
         .unwrap();
@@ -913,6 +913,59 @@ async fn test_files_write_and_read_globals() {
     assert_eq!(
         result,
         serde_json::json!({"ok": true, "contents": "hello files"})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_files_handle_is_reusable() {
+    let conn = test_conn().await;
+    let dir = files_test_dir();
+    let engine = Engine::new(conn).await.unwrap();
+    engine
+        .setup(&test_context(), Some(FileStore::new(dir.clone())))
+        .await
+        .unwrap();
+
+    // A single handle is re-used across Write/Read/Exists without reopening.
+    let (text, _) = engine
+        .run_section(
+            "const h = FILE.Open('log.txt'); await h.Write('one'); await h.Write('two'); const r = await h.Read(); const e = await h.Exists(); writeRaw(JSON.stringify({contents: r.contents, exists: e.exists}))",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        serde_json::json!({"contents": "two", "exists": true})
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_files_direct_methods() {
+    let conn = test_conn().await;
+    let dir = files_test_dir();
+    let engine = Engine::new(conn).await.unwrap();
+    engine
+        .setup(&test_context(), Some(FileStore::new(dir.clone())))
+        .await
+        .unwrap();
+
+    // Direct path-taking convenience methods still work alongside FILE.Open.
+    let (text, _) = engine
+        .run_section(
+            "await FILE.Write('note.txt', 'hello'); await FILE.Mkdir('sub'); const read = (await FILE.Read('note.txt')).contents; const exists = (await FILE.Exists('note.txt')).exists; const isDir = (await FILE.IsDir('sub')).isDir; await FILE.Delete('note.txt'); const l = await FILE.List('.'); writeRaw(JSON.stringify({read, exists, isDir, list: l}))",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        serde_json::json!({
+            "read": "hello",
+            "exists": true,
+            "isDir": true,
+            "list": [{"name": "sub", "isDir": true}]
+        })
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -928,17 +981,17 @@ async fn test_files_list_and_delete_globals() {
         .unwrap();
 
     engine
-        .run_section("await FILES.Write('one.txt', '1')")
+        .run_section("await FILE.Open('one.txt').Write('1')")
         .await
         .unwrap();
     engine
-        .run_section("await FILES.Mkdir('sub')")
+        .run_section("await FILE.Open('sub').Mkdir()")
         .await
         .unwrap();
 
     let (text, _) = engine
         .run_section(
-            "const r = await FILES.Exists('one.txt'); write(String(r.exists)); const l = await FILES.List('.'); writeRaw(JSON.stringify(l.entries))",
+            "const r = await FILE.Open('one.txt').Exists(); write(String(r.exists)); const l = await FILE.Open('.').List(); writeRaw(JSON.stringify(l))",
         )
         .await
         .unwrap();
@@ -953,11 +1006,11 @@ async fn test_files_list_and_delete_globals() {
     );
 
     engine
-        .run_section("await FILES.Delete('one.txt')")
+        .run_section("await FILE.Open('one.txt').Delete()")
         .await
         .unwrap();
     let (text, _) = engine
-        .run_section("const r = await FILES.Exists('one.txt'); write(String(r.exists))")
+        .run_section("const r = await FILE.Open('one.txt').Exists(); write(String(r.exists))")
         .await
         .unwrap();
     assert!(text.ends_with("false"), "unexpected: {text:?}");
@@ -970,10 +1023,18 @@ async fn test_files_missing_folder_methods_throw() {
     let engine = Engine::new(conn).await.unwrap();
     engine.setup(&test_context(), None).await.unwrap();
 
-    let result = engine.run_section("await FILES.Read('x.txt')").await;
+    let result = engine.run_section("await FILE.Open('x.txt').Read()").await;
     assert!(result.is_err());
 
-    let result = engine.run_section("await FILES.Write('x.txt', 'y')").await;
+    let result = engine
+        .run_section("await FILE.Open('x.txt').Write('y')")
+        .await;
+    assert!(result.is_err());
+
+    let result = engine.run_section("await FILE.Read('x.txt')").await;
+    assert!(result.is_err());
+
+    let result = engine.run_section("await FILE.Write('x.txt', 'y')").await;
     assert!(result.is_err());
 }
 
@@ -987,11 +1048,21 @@ async fn test_files_traversal_throws() {
         .await
         .unwrap();
 
-    let result = engine.run_section("await FILES.Read('../evil.txt')").await;
+    let result = engine
+        .run_section("await FILE.Open('../evil.txt').Read()")
+        .await;
     assert!(result.is_err());
 
     let result = engine
-        .run_section("await FILES.Write('/etc/passwd', 'pwned')")
+        .run_section("await FILE.Open('/etc/passwd').Write('pwned')")
+        .await;
+    assert!(result.is_err());
+
+    let result = engine.run_section("await FILE.Read('../evil.txt')").await;
+    assert!(result.is_err());
+
+    let result = engine
+        .run_section("await FILE.Write('/etc/passwd', 'pwned')")
         .await;
     assert!(result.is_err());
     let _ = std::fs::remove_dir_all(&dir);

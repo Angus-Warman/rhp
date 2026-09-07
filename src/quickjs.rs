@@ -423,9 +423,17 @@ fn register_db<'js>(ctx: &Ctx<'js>, conn: DbConn) -> rquickjs::Result<Object<'js
     Ok(db)
 }
 
-/// Build the `FILES` global for scripts to read, write, list and delete files
-/// inside the configured files folder (`FILES_FOLDER`). All operations are
-/// async and return `{ ok: true, ... }` on success or `{ ok: false, error }`
+/// Build the `FILE` global for scripts to read, write, list and delete files
+/// inside the configured files folder (`FILES_FOLDER`). Two calling styles are
+/// supported:
+///
+/// - Direct convenience methods that take a path, e.g.
+///   `await FILE.Write('foo.txt', 'bar')` or `await FILE.Read('foo.txt')`.
+/// - A synchronous `FILE.Open(rel)` that returns a re-usable handle bound to
+///   `rel`, e.g. `await FILE.Open('foo.txt').Write('bar')`, which can then be
+///   used many times without reopening.
+///
+/// Operations return `{ ok: true, ... }` on success or `{ ok: false, error }`
 /// on failure (which becomes a thrown exception via `check_error`).
 fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Result<Object<'js>> {
     let files = Object::new(ctx.clone())?;
@@ -436,10 +444,11 @@ fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Re
         let missing = Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
             Err::<Value<'js>, rquickjs::Error>(js_err(
                 &ctx,
-                "FILES is not configured: set FILES_FOLDER when starting the server",
+                "FILE is not configured: set FILES_FOLDER when starting the server",
             ))
         })?;
         let nofiles = Object::new(ctx.clone())?;
+        nofiles.set("Open", missing.clone())?;
         nofiles.set("Read", missing.clone())?;
         nofiles.set("Write", missing.clone())?;
         nofiles.set("Exists", missing.clone())?;
@@ -450,6 +459,18 @@ fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Re
         return Ok(nofiles);
     };
 
+    // FILE.Open(rel) is synchronous: it validates nothing eagerly and returns a
+    // re-usable handle bound to `rel`. Errors surface when a method is awaited.
+    let open_store = store.clone();
+    let open = Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, rel: String| -> rquickjs::Result<Object<'js>> {
+            build_file_handle(&ctx, &open_store, rel)
+        },
+    )?;
+    files.set("Open", open)?;
+
+    // Direct convenience methods that take a relative path as an argument.
     let read_store = store.clone();
     let read = Function::new(
         ctx.clone(),
@@ -528,7 +549,12 @@ fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Re
             async move {
                 let o = store.list(&rel).await;
                 check_error(&ctx, &o)?;
-                json_to_js(&ctx, &serde_json::Value::Object(o))
+                // List returns the entries array directly, not the { ok } wrapper.
+                let entries = o
+                    .get("entries")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(Vec::new()));
+                json_to_js(&ctx, &entries)
             }
         }),
     )?;
@@ -549,6 +575,136 @@ fn register_files<'js>(ctx: &Ctx<'js>, store: Option<FileStore>) -> rquickjs::Re
     files.set("Mkdir", mkdir)?;
 
     Ok(files)
+}
+
+/// Build a re-usable handle for a single relative path. Each async method
+/// operates on the same `rel`, so a handle can be written/read/listed many
+/// times before being discarded.
+fn build_file_handle<'js>(
+    ctx: &Ctx<'js>,
+    store: &FileStore,
+    rel: String,
+) -> rquickjs::Result<Object<'js>> {
+    let handle = Object::new(ctx.clone())?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let write = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>, contents: String| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.write(&rel, &contents).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("Write", write)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let read = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.read(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("Read", read)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let exists = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.exists(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("Exists", exists)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let is_dir = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.is_dir(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("IsDir", is_dir)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let delete = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.delete(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("Delete", delete)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let list = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.list(&rel).await;
+                check_error(&ctx, &o)?;
+                // List returns the entries array directly, not the { ok } wrapper.
+                let entries = o
+                    .get("entries")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(Vec::new()));
+                json_to_js(&ctx, &entries)
+            }
+        }),
+    )?;
+    handle.set("List", list)?;
+
+    let s = store.clone();
+    let r = rel.clone();
+    let mkdir = Function::new(
+        ctx.clone(),
+        Async(move |ctx: Ctx<'js>| {
+            let store = s.clone();
+            let rel = r.clone();
+            async move {
+                let o = store.mkdir(&rel).await;
+                check_error(&ctx, &o)?;
+                json_to_js(&ctx, &serde_json::Value::Object(o))
+            }
+        }),
+    )?;
+    handle.set("Mkdir", mkdir)?;
+
+    Ok(handle)
 }
 
 // ---- Engine ----
@@ -574,7 +730,7 @@ impl Engine {
     }
 
     /// Register request globals into a fresh context. Sets up `RES`,
-    /// `QUERY`, `BODY`, `REQ`, `DB`, `FILES`, `console`, `VERSION`,
+    /// `QUERY`, `BODY`, `REQ`, `DB`, `FILE`, `console`, `VERSION`,
     /// `SOCKET` (if a socket is present for the request), plus
     /// `write`/`writeRaw`.
     pub async fn setup(&self, context: &Context, files: Option<FileStore>) -> Result<()> {
@@ -744,9 +900,9 @@ impl Engine {
                 let db = register_db(&ctx, conn.clone())?;
                 globals.set("DB", db)?;
 
-                // FILES object (when a FILES_FOLDER was provided)
+                // FILE object (when a FILES_FOLDER was provided)
                 let files_obj = register_files(&ctx, files.clone())?;
-                globals.set("FILES", files_obj)?;
+                globals.set("FILE", files_obj)?;
 
                 // SOCKET (when this request is a websocket connection)
                 if let Some(socket) = &socket {
