@@ -564,6 +564,7 @@ pub async fn connect(dsn: &str) -> Result<DbConn, sqlx::Error> {
     // concurrent readers/writers don't trip "database is locked".
     let is_sqlite = !dsn.starts_with("postgres");
     let pool = AnyPoolOptions::new()
+        .max_connections(1)
         .after_connect(move |conn, _meta| {
             Box::pin(async move {
                 if is_sqlite {
